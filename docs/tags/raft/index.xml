@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>raft on 酱油王</title>
+    <link>http://example.org/tags/raft/</link>
+    <description>Recent content in raft on 酱油王</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>en-us</language>
+    <lastBuildDate>Thu, 23 Dec 2021 00:00:00 +0000</lastBuildDate><atom:link href="http://example.org/tags/raft/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>etcd raft</title>
+      <link>http://example.org/posts/etcd_raft/</link>
+      <pubDate>Thu, 23 Dec 2021 00:00:00 +0000</pubDate>
+      
+      <guid>http://example.org/posts/etcd_raft/</guid>
+      <description>etcd 代码分析可以参考：etcd 注解版 ，也欢迎大家交流讨论
+Raft message type #  Raft集群中节点之间的通信都是通过传递不同的Message来完成的，Message类型 有很多种，下面介绍部分：
+ MsgHup   用于选举，对于follower或者candidate，其tick函数对应tickElection。如果follower或者candidate在选举超时时间都没有收到心跳信息，它将发送MsgHup到Step方法，其角色将变为candidate（对于follower节点）并发起新一轮选举。
+  MsgBeat   MsgApp是一个内部使用的类型，对于leader节点，其tick函数对应tickHeartbeat，周期性地向follower节点发送MsgHeartbeat消息。
+  MsgProp   MsgProp提议附加数据到log entries，而且它会重定向propose到leader节点。因此，send方法用hardState覆写了Message的term号。-
+ 当MsgProp传递到leader的step方法，leader首先会调用appendEntry方法将entries附加到它的log，接着会调用bcastAppend方法发送entries到peers。 当MsgProp传递到candidate，则直接丢弃。 当传递到follower，MsgProp存储到follower的mailbox，即msgs，它保存了发送者的ID，随后通过rafthttp包转发到leader。    MsgApp   复制log entries。leader调用bcastAppend方法，其会调用bcastAppend方法发送即将要复制的MsgApp类型的logs。当MsgApp被传递到candidate的Step方法，candidate将会revert back to follower，表示存在有效的leader在发送MsgApp消息。candidate和follower会回复MsgAppResp消息。
+  MsgAppResp   用于响应log复制请求。当MsgApp发送到candidate和follower的Step方法，它们会调用handleAppendEntries方法，其会发送MsgAppResp到raft mailbox。
+  MsgVote   请求投票选举。当MsgHup传递到follower或candidate的Step方法，将会调用campaign方法去竞选自己成为leader， 一旦campaign方法被调用，节点将会变成candidate，然后发送MsgVote到peers去请求投票。
+ 当消息传递到leader或candidate的Step方法，如果消息的term小于leader或candidate的term，则消息会被拒绝掉（MsgVoteResp将设置Reject为true），如果leader或candidate接收到term更大的MsgVote，他们将会revert back to follower。 当&amp;rsquo;MsgVote&amp;rsquo;被传递给follower时，只有当sender的last term大于MsgVote的term或sender的last term等于MsgVote的term但sender的最后提交索引大于或等于follower的时，它才会投票给sender。    MsgVoteResp   投票选举相应消息。当candidate收到MsgVoteResp，它会统计自己的票数，如果票数超过quorum，它将会变成leader，然后调用bcastAppend，如果candidate收到大多数的拒绝投票，则revert back to follower。</description>
+    </item>
+    
+  </channel>
+</rss>

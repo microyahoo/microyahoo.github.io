@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="概述 #  WAL(Write-ahead logging, 预写日志)是关系型数据库中利用日志来实现事务性和持久性的一种技术，即在某个操作之前先将这个事情记录下来，以便之后对数据进行回滚，重试等操作保证数据的可靠性。
+Prometheus为了防止丢失暂存在内存中的还未被写入磁盘的监控数据，引入了WAL机制。WAL被分割成默认大小为128M的文件段（segment），之前版本默认大小是256M，文件段以数字命名，长度为8位的整形。WAL的写入单位是页（page），每页的大小为32KB，所以每个段大小必须是页的大小的整数倍。每个文件段都有一个“==已使用的页？==”属性来标识在该段中已经分配的页数目，如果WAL一次性写入的页数超过一个段的空闲页数，就会创建一个新的文件段来保存这些页，从而确保一次性写入的页不会跨段存储。
+const ( DefaultSegmentSize = 128 * 1024 * 1024 // 128 MB  pageSize = 32 * 1024 // 32KB  recordHeaderSize = 7 ) 本文是在prometheus tsdb部分源码阅读之wal.LogSeries基础上进行扩展，由于tsdb/wal.go文件中定义的WAL接口以及相关方法已经deprecated，如下所示。因此本文针对tsdb/wal/wal.go文件进行分析。
+// WAL is a write ahead log that can log new series labels and samples. // It must be completely read before new entries are logged. // // DEPRECATED: use wal pkg combined with the record codex instead.">
+<meta name="theme-color" content="#FFFFFF">
+<meta name="color-scheme" content="light dark"><meta property="og:title" content="Prometheus WAL源码阅读" />
+<meta property="og:description" content="概述 #  WAL(Write-ahead logging, 预写日志)是关系型数据库中利用日志来实现事务性和持久性的一种技术，即在某个操作之前先将这个事情记录下来，以便之后对数据进行回滚，重试等操作保证数据的可靠性。
+Prometheus为了防止丢失暂存在内存中的还未被写入磁盘的监控数据，引入了WAL机制。WAL被分割成默认大小为128M的文件段（segment），之前版本默认大小是256M，文件段以数字命名，长度为8位的整形。WAL的写入单位是页（page），每页的大小为32KB，所以每个段大小必须是页的大小的整数倍。每个文件段都有一个“==已使用的页？==”属性来标识在该段中已经分配的页数目，如果WAL一次性写入的页数超过一个段的空闲页数，就会创建一个新的文件段来保存这些页，从而确保一次性写入的页不会跨段存储。
+const ( DefaultSegmentSize = 128 * 1024 * 1024 // 128 MB  pageSize = 32 * 1024 // 32KB  recordHeaderSize = 7 ) 本文是在prometheus tsdb部分源码阅读之wal.LogSeries基础上进行扩展，由于tsdb/wal.go文件中定义的WAL接口以及相关方法已经deprecated，如下所示。因此本文针对tsdb/wal/wal.go文件进行分析。
+// WAL is a write ahead log that can log new series labels and samples. // It must be completely read before new entries are logged. // // DEPRECATED: use wal pkg combined with the record codex instead." />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="http://example.org/posts/prometheus-wal/" /><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2021-12-23T00:00:00+00:00" />
+<meta property="article:modified_time" content="2021-12-23T00:00:00+00:00" />
+
+<title>Prometheus WAL源码阅读 | 酱油王</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/favicon.png" type="image/x-icon">
+<link rel="stylesheet" href="/book.min.46181bc93375ba932026e753b37c40e6ff8bb16a9ef770c78bcc663e4577b1ba.css" integrity="sha256-RhgbyTN1upMgJudTs3xA5v&#43;LsWqe93DHi8xmPkV3sbo=" crossorigin="anonymous">
+  <script defer src="/flexsearch.min.js"></script>
+  <script defer src="/en.search.min.e3d1bbac78330f1cc70982a957603bba2ca132f3b1f8b160e8efe21defc8e54b.js" integrity="sha256-49G7rHgzDxzHCYKpV2A7uiyhMvOx&#43;LFg6O/iHe/I5Us=" crossorigin="anonymous"></script>
+<!--
+Made with Book Theme
+https://github.com/alex-shpak/hugo-book
+-->
+  
+</head>
+<body dir="ltr">
+  <input type="checkbox" class="hidden toggle" id="menu-control" />
+  <input type="checkbox" class="hidden toggle" id="toc-control" />
+  <main class="container flex">
+    <aside class="book-menu">
+      <div class="book-menu-content">
+        
+  <nav>
+<h2 class="book-brand">
+  <a class="flex align-center" href="/"><span>酱油王</span>
+  </a>
+</h2>
+
+
+<div class="book-search">
+  <input type="text" id="book-search-input" placeholder="Search" aria-label="Search" maxlength="64" data-hotkeys="s/" />
+  <div class="book-search-spinner hidden"></div>
+  <ul id="book-search-results"></ul>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+  
+<ul>
+  
+  <li>
+    <a href="/posts/" >
+        Blog
+      </a>
+  </li>
+  
+</ul>
+
+
+
+
+
+
+</nav>
+
+
+
+
+  <script>(function(){var a=document.querySelector("aside .book-menu-content");addEventListener("beforeunload",function(b){localStorage.setItem("menu.scrollTop",a.scrollTop)}),a.scrollTop=localStorage.getItem("menu.scrollTop")})()</script>
+
+
+ 
+      </div>
+    </aside>
+
+    <div class="book-page">
+      <header class="book-header">
+        
+  <div class="flex align-center justify-between">
+  <label for="menu-control">
+    <img src="/svg/menu.svg" class="book-icon" alt="Menu" />
+  </label>
+
+  <strong>Prometheus WAL源码阅读</strong>
+
+  <label for="toc-control">
+    
+    <img src="/svg/toc.svg" class="book-icon" alt="Table of Contents" />
+    
+  </label>
+</div>
+
+
+  
+  <aside class="hidden clearfix">
+    
+  
+<nav id="TableOfContents">
+  <ul>
+    <li><a href="#概述">概述</a></li>
+    <li><a href="#prometheus-storage-hierarchy">Prometheus storage hierarchy</a></li>
+    <li><a href="#create-segment">Create Segment</a></li>
+    <li><a href="#wal-repair">WAL Repair</a>
+      <ul>
+        <li><a href="#wal-reader">WAL Reader</a></li>
+      </ul>
+    </li>
+    <li><a href="#references">References</a></li>
+  </ul>
+</nav>
+
+
+
+  </aside>
+  
+ 
+      </header>
+
+      
+      
+<article class="markdown">
+  <h1>
+    <a href="/posts/prometheus-wal/">Prometheus WAL源码阅读</a>
+  </h1>
+  
+  <h5>December 23, 2021</h5>
+
+
+
+  
+  <div>
+    
+      <a href="/categories/prometheus/">Prometheus</a>, 
+      <a href="/categories/golang/">golang</a>
+  </div>
+  
+
+  
+  <div>
+    
+      <a href="/tags/prometheus/">prometheus</a>, 
+      <a href="/tags/golang/">golang</a>
+  </div>
+  
+
+
+
+<hr>
+<h2 id="概述">
+  概述
+  <a class="anchor" href="#%e6%a6%82%e8%bf%b0">#</a>
+</h2>
+<p>WAL(Write-ahead logging, 预写日志)是关系型数据库中利用日志来实现事务性和持久性的一种技术，即在某个操作之前先将这个事情记录下来，以便之后对数据进行回滚，重试等操作保证数据的可靠性。</p>
+<p>Prometheus为了防止丢失暂存在内存中的还未被写入磁盘的监控数据，引入了WAL机制。WAL被分割成默认大小为128M的文件段（segment），之前版本默认大小是256M，文件段以数字命名，长度为8位的整形。WAL的写入单位是页（page），每页的大小为32KB，所以每个段大小必须是页的大小的整数倍。每个文件段都有一个“==已使用的页？==”属性来标识在该段中已经分配的页数目，如果WAL一次性写入的页数超过一个段的空闲页数，就会创建一个新的文件段来保存这些页，从而确保一次性写入的页<strong>不会跨段存储</strong>。</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#66d9ef">const</span> (
+     <span style="color:#a6e22e">DefaultSegmentSize</span> = <span style="color:#ae81ff">128</span> <span style="color:#f92672">*</span> <span style="color:#ae81ff">1024</span> <span style="color:#f92672">*</span> <span style="color:#ae81ff">1024</span> <span style="color:#75715e">// 128 MB
+</span><span style="color:#75715e"></span>     <span style="color:#a6e22e">pageSize</span>           = <span style="color:#ae81ff">32</span> <span style="color:#f92672">*</span> <span style="color:#ae81ff">1024</span>         <span style="color:#75715e">// 32KB
+</span><span style="color:#75715e"></span>     <span style="color:#a6e22e">recordHeaderSize</span>   = <span style="color:#ae81ff">7</span>
+)
+</code></pre></div><p>本文是在<a href="https://www.jianshu.com/p/e0144be9692a">prometheus tsdb部分源码阅读之wal.LogSeries</a>基础上进行扩展，由于<code>tsdb/wal.go</code>文件中定义的WAL接口以及相关方法已经deprecated，如下所示。因此本文针对<code>tsdb/wal/wal.go</code>文件进行分析。</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#75715e">// WAL is a write ahead log that can log new series labels and samples.
+</span><span style="color:#75715e">// It must be completely read before new entries are logged.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e">// DEPRECATED: use wal pkg combined with the record codex instead.
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">type</span> <span style="color:#a6e22e">WAL</span> <span style="color:#66d9ef">interface</span> {
+    <span style="color:#a6e22e">Reader</span>() <span style="color:#a6e22e">WALReader</span>
+    <span style="color:#a6e22e">LogSeries</span>([]<span style="color:#a6e22e">RefSeries</span>) <span style="color:#66d9ef">error</span>
+    <span style="color:#a6e22e">LogSamples</span>([]<span style="color:#a6e22e">RefSample</span>) <span style="color:#66d9ef">error</span>
+    <span style="color:#a6e22e">LogDeletes</span>([]<span style="color:#a6e22e">Stone</span>) <span style="color:#66d9ef">error</span>
+    <span style="color:#a6e22e">Truncate</span>(<span style="color:#a6e22e">mint</span> <span style="color:#66d9ef">int64</span>, <span style="color:#a6e22e">keep</span> <span style="color:#66d9ef">func</span>(<span style="color:#66d9ef">uint64</span>) <span style="color:#66d9ef">bool</span>) <span style="color:#66d9ef">error</span>
+    <span style="color:#a6e22e">Close</span>() <span style="color:#66d9ef">error</span>
+}
+</code></pre></div><hr>
+<h2 id="prometheus-storage-hierarchy">
+  Prometheus storage hierarchy
+  <a class="anchor" href="#prometheus-storage-hierarchy">#</a>
+</h2>
+<pre tabindex="0"><code>(ENV) 🍺 /Users/xsky/go/src/github.com/microyahoo/prometheus/data ☞ tree -h
+.
+├── [ 192]  01DPE8T5XPQ9ZYHSNJYBJBKGR6
+│   ├── [  96]  chunks
+│   │   └── [7.1K]  000001
+│   ├── [ 22K]  index
+│   ├── [ 272]  meta.json
+│   └── [   9]  tombstones
+├── [   0]  lock
+├── [ 20K]  queries.active
+└── [ 256]  wal
+    ├── [   0]  00000050
+    ├── [   0]  00000051
+    ├── [   0]  00000052
+    ├── [   0]  00000053
+    ├── [ 10K]  00000054
+    └── [  96]  checkpoint.000049
+        └── [ 32K]  00000000
+
+4 directories, 12 files
+</code></pre><p>从上面目录结构可以看出wal主要包含segment文件，checkpoint目录。</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#75715e">// WAL is a write ahead log that stores records in segment files.
+</span><span style="color:#75715e">// It must be read from start to end once before logging new data.
+</span><span style="color:#75715e">// If an error occurs during read, the repair procedure must be called
+</span><span style="color:#75715e">// before it&#39;s safe to do further writes.
+</span><span style="color:#75715e">//
+</span><span style="color:#75715e">// Segments are written to in pages of 32KB, with records possibly split
+</span><span style="color:#75715e">// across page boundaries.
+</span><span style="color:#75715e">// Records are never split across segments to allow full segments to be
+</span><span style="color:#75715e">// safely truncated. It also ensures that torn writes never corrupt records
+</span><span style="color:#75715e">// beyond the most recent segment.
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">type</span> <span style="color:#a6e22e">WAL</span> <span style="color:#66d9ef">struct</span> {
+    <span style="color:#a6e22e">dir</span>         <span style="color:#66d9ef">string</span>
+    <span style="color:#a6e22e">logger</span>      <span style="color:#a6e22e">log</span>.<span style="color:#a6e22e">Logger</span>
+    <span style="color:#a6e22e">segmentSize</span> <span style="color:#66d9ef">int</span>
+    <span style="color:#a6e22e">mtx</span>         <span style="color:#a6e22e">sync</span>.<span style="color:#a6e22e">RWMutex</span>
+    <span style="color:#a6e22e">segment</span>     <span style="color:#f92672">*</span><span style="color:#a6e22e">Segment</span> <span style="color:#75715e">// Active segment.
+</span><span style="color:#75715e"></span>    <span style="color:#a6e22e">donePages</span>   <span style="color:#66d9ef">int</span>      <span style="color:#75715e">// Pages written to the segment.
+</span><span style="color:#75715e"></span>    <span style="color:#a6e22e">page</span>        <span style="color:#f92672">*</span><span style="color:#a6e22e">page</span>    <span style="color:#75715e">// Active page.
+</span><span style="color:#75715e"></span>    <span style="color:#a6e22e">stopc</span>       <span style="color:#66d9ef">chan</span> <span style="color:#66d9ef">chan</span> <span style="color:#66d9ef">struct</span>{}
+    <span style="color:#a6e22e">actorc</span>      <span style="color:#66d9ef">chan</span> <span style="color:#66d9ef">func</span>()
+    <span style="color:#a6e22e">closed</span>      <span style="color:#66d9ef">bool</span> <span style="color:#75715e">// To allow calling Close() more than once without blocking.
+</span><span style="color:#75715e"></span>    <span style="color:#a6e22e">compress</span>    <span style="color:#66d9ef">bool</span>
+    <span style="color:#a6e22e">snappyBuf</span>   []<span style="color:#66d9ef">byte</span>
+
+    <span style="color:#a6e22e">fsyncDuration</span>   <span style="color:#a6e22e">prometheus</span>.<span style="color:#a6e22e">Summary</span>
+    <span style="color:#a6e22e">pageFlushes</span>     <span style="color:#a6e22e">prometheus</span>.<span style="color:#a6e22e">Counter</span>
+    <span style="color:#a6e22e">pageCompletions</span> <span style="color:#a6e22e">prometheus</span>.<span style="color:#a6e22e">Counter</span>
+    <span style="color:#a6e22e">truncateFail</span>    <span style="color:#a6e22e">prometheus</span>.<span style="color:#a6e22e">Counter</span>
+    <span style="color:#a6e22e">truncateTotal</span>   <span style="color:#a6e22e">prometheus</span>.<span style="color:#a6e22e">Counter</span>
+    <span style="color:#a6e22e">currentSegment</span>  <span style="color:#a6e22e">prometheus</span>.<span style="color:#a6e22e">Gauge</span>
+}
+</code></pre></div><div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#75715e">// Segment represents a segment file.
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">type</span> <span style="color:#a6e22e">Segment</span> <span style="color:#66d9ef">struct</span> {
+    <span style="color:#f92672">*</span><span style="color:#a6e22e">os</span>.<span style="color:#a6e22e">File</span>
+    <span style="color:#a6e22e">dir</span> <span style="color:#66d9ef">string</span>
+    <span style="color:#a6e22e">i</span>   <span style="color:#66d9ef">int</span>
+}
+</code></pre></div><p><img src="https://note.youdao.com/yws/api/personal/file/WEBb9810f4ea734eae8aec71710c79e3329?method=getImage&amp;version=12759&amp;cstk=-lHXuqC6" alt="" /></p>
+<hr>
+<h2 id="create-segment">
+  Create Segment
+  <a class="anchor" href="#create-segment">#</a>
+</h2>
+<p>创建<code>segment</code>主要是通过<code>New</code>方法或者<code>NewSize</code>方法。其中<code>NewSize</code>可以指定segment的大小，<code>New</code>方法传入的是默认的segment大小，即128M。加载DB时如果WAL enabled的话，则会调用<code>NewSize</code>创建新的segment，如下所示。下面对<code>NewSize</code>进行展开。</p>
+<pre tabindex="0"><code>wlog, err = wal.NewSize(l, r, filepath.Join(dir, &quot;wal&quot;), segmentSize, opts.WALCompression)
+</code></pre><ul>
+<li>首先判断段大小是否是<code>page</code>的整数倍。</li>
+<li>如果<code>wal</code>目录不存在的话则创建<code>wal</code>目录。</li>
+<li>创建WAL数据结构。因为WAL是与<code>active segment</code>关联的，所以WAL <code>segmentSize</code>即为指定的segmentSize。</li>
+<li>查找目前WAL中所有的segment记录。因为segment是按照数字命名并递增的，所以其名字即为索引，其内部表述为<code>segmentRef</code>，name为其文件名，即前缀为0填充的八位整形表示，index即为其整形表示。</li>
+</ul>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#66d9ef">type</span> <span style="color:#a6e22e">segmentRef</span> <span style="color:#66d9ef">struct</span> {
+    <span style="color:#a6e22e">name</span>  <span style="color:#66d9ef">string</span>
+    <span style="color:#a6e22e">index</span> <span style="color:#66d9ef">int</span>
+}
+</code></pre></div><ul>
+<li>上面步骤获取到last segment之后，下一个要写入的segment index即为<code>last+1</code>，创建新的segment。</li>
+<li>将新创建的segment设置为WAL的active segment，同时根据segment文件大小设置WAL <code>donePages</code>，将WAL <code>currentSegment</code>设置为新创建的segment的index。</li>
+<li>启动新的goroutine执行<code>actorc</code>通道发送过来的func。主要用于执行比较耗时的操作，例如将segment中的数据<code>fsync</code>到disk中。</li>
+</ul>
+<hr>
+<h2 id="wal-repair">
+  WAL Repair
+  <a class="anchor" href="#wal-repair">#</a>
+</h2>
+<blockquote>
+<p>Repair attempts to repair the WAL based on the error.
+It discards all data after the corruption.</p>
+</blockquote>
+<p>需要注意的是<code>Repair</code>仅能修复<code>CorruptionErr</code>。<code>CorruptionErr</code>中指定了目录，段，偏移量以及具体的错误信息。</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#75715e">// CorruptionErr is an error that&#39;s returned when corruption is encountered.
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">type</span> <span style="color:#a6e22e">CorruptionErr</span> <span style="color:#66d9ef">struct</span> {
+    <span style="color:#a6e22e">Dir</span>     <span style="color:#66d9ef">string</span>
+    <span style="color:#a6e22e">Segment</span> <span style="color:#66d9ef">int</span>
+    <span style="color:#a6e22e">Offset</span>  <span style="color:#66d9ef">int64</span>
+    <span style="color:#a6e22e">Err</span>     <span style="color:#66d9ef">error</span>
+}
+</code></pre></div><ul>
+<li>首先获取wal目录中所有的segments。</li>
+<li><strong>删除</strong><code>CorruptionErr.Segment</code>索引之后的所有的segments。</li>
+<li>关闭WAL的<code>active segment</code>。</li>
+<li>将<code>CorruptionErr.Segment</code>索引的segment加上<code>.repair</code>后缀并重命名。</li>
+<li>创建一个新的segment文件，其index为<code>CorruptionErr.Segment</code>，即Corruption segment重命名之后重新创建一个新的segment文件，并将WAL的active segment指向新创建的segment。</li>
+<li>将Corruption segment中的数据读到新创建的segment文件中，读到<code>CorruptionErr.Offset</code>为止。
+<ul>
+<li>遍历读取corrupted segment中的records，将其写入new segment中。</li>
+</ul>
+</li>
+<li>将active page刷入file。</li>
+<li>关闭corrupted segment文件，并删除。</li>
+<li>创建一个新的segment文件，其index为<code>CorruptionErr.Segment</code>的index+1，并将active segment指向新创建的segment。</li>
+</ul>
+<p>下面截取<code>tsdb/wal/wal.go</code>文件中的部分Repair的代码进行分析。</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go">    <span style="color:#75715e">// 打开corrupted segment文件并读取其中的records。
+</span><span style="color:#75715e"></span>    <span style="color:#a6e22e">r</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">NewReader</span>(<span style="color:#a6e22e">bufio</span>.<span style="color:#a6e22e">NewReader</span>(<span style="color:#a6e22e">f</span>))
+
+    <span style="color:#75715e">// 下面WAL Reader部分有详细解释
+</span><span style="color:#75715e"></span>    <span style="color:#66d9ef">for</span> <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">Next</span>() {
+        <span style="color:#75715e">// Add records only up to the where the error was.
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// 读取到出错的地方为止。
+</span><span style="color:#75715e"></span>        <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">Offset</span>() <span style="color:#f92672">&gt;=</span> <span style="color:#a6e22e">cerr</span>.<span style="color:#a6e22e">Offset</span> {
+            <span style="color:#66d9ef">break</span>
+        }
+        <span style="color:#75715e">// 下面着重介绍此方法
+</span><span style="color:#75715e"></span>        <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">err</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">Log</span>(<span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">Record</span>()); <span style="color:#a6e22e">err</span> <span style="color:#f92672">!=</span> <span style="color:#66d9ef">nil</span> {
+            <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">errors</span>.<span style="color:#a6e22e">Wrap</span>(<span style="color:#a6e22e">err</span>, <span style="color:#e6db74">&#34;insert record&#34;</span>)
+        }
+    }
+    <span style="color:#75715e">// We expect an error here from r.Err(), so nothing to handle.
+</span><span style="color:#75715e"></span>
+    <span style="color:#75715e">// We need to pad to the end of the last page in the repaired segment
+</span><span style="color:#75715e"></span>    <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">err</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">flushPage</span>(<span style="color:#66d9ef">true</span>); <span style="color:#a6e22e">err</span> <span style="color:#f92672">!=</span> <span style="color:#66d9ef">nil</span> {
+        <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">errors</span>.<span style="color:#a6e22e">Wrap</span>(<span style="color:#a6e22e">err</span>, <span style="color:#e6db74">&#34;flush page in repair&#34;</span>)
+    }
+
+    <span style="color:#75715e">// We explicitly close even when there is a defer for Windows to be
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// able to delete it. The defer is in place to close it in-case there
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// are errors above.
+</span><span style="color:#75715e"></span>    <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">err</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">f</span>.<span style="color:#a6e22e">Close</span>(); <span style="color:#a6e22e">err</span> <span style="color:#f92672">!=</span> <span style="color:#66d9ef">nil</span> {
+        <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">errors</span>.<span style="color:#a6e22e">Wrap</span>(<span style="color:#a6e22e">err</span>, <span style="color:#e6db74">&#34;close corrupted file&#34;</span>)
+    }
+    <span style="color:#75715e">// 删除.repair文件
+</span><span style="color:#75715e"></span>    <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">err</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">os</span>.<span style="color:#a6e22e">Remove</span>(<span style="color:#a6e22e">tmpfn</span>); <span style="color:#a6e22e">err</span> <span style="color:#f92672">!=</span> <span style="color:#66d9ef">nil</span> {
+        <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">errors</span>.<span style="color:#a6e22e">Wrap</span>(<span style="color:#a6e22e">err</span>, <span style="color:#e6db74">&#34;delete corrupted segment&#34;</span>)
+    }
+
+    <span style="color:#75715e">// Explicitly close the segment we just repaired to avoid issues with Windows.
+</span><span style="color:#75715e"></span>    <span style="color:#a6e22e">s</span>.<span style="color:#a6e22e">Close</span>()
+    
+    <span style="color:#75715e">// We always want to start writing to a new Segment rather than an existing
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Segment, which is handled by NewSize, but earlier in Repair we&#39;re deleting
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// all segments that come after the corrupted Segment. Recreate a new Segment here.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// 创建新的segment file，并将active segment指向此新创建的segment file
+</span><span style="color:#75715e"></span>    <span style="color:#a6e22e">s</span>, <span style="color:#a6e22e">err</span> = <span style="color:#a6e22e">CreateSegment</span>(<span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">dir</span>, <span style="color:#a6e22e">cerr</span>.<span style="color:#a6e22e">Segment</span><span style="color:#f92672">+</span><span style="color:#ae81ff">1</span>)
+    <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">err</span> <span style="color:#f92672">!=</span> <span style="color:#66d9ef">nil</span> {
+        <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">err</span>
+    }
+    <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">err</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">setSegment</span>(<span style="color:#a6e22e">s</span>); <span style="color:#a6e22e">err</span> <span style="color:#f92672">!=</span> <span style="color:#66d9ef">nil</span> {
+        <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">err</span>
+    }
+    <span style="color:#66d9ef">return</span> <span style="color:#66d9ef">nil</span>
+</code></pre></div><p>Repair的核心就是将corrupted segment文件中的数据写入新的segment中，然后删除corrupted segment文件。下面着重介绍其写入过程，主要是调用WAL的<code>log</code>方法。</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#75715e">// log writes rec to the log and forces a flush of the current page if:
+</span><span style="color:#75715e">// - the final record of a batch
+</span><span style="color:#75715e">// - the record is bigger than the page size
+</span><span style="color:#75715e">// - the current page is full.
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">func</span> (<span style="color:#a6e22e">w</span> <span style="color:#f92672">*</span><span style="color:#a6e22e">WAL</span>) <span style="color:#a6e22e">log</span>(<span style="color:#a6e22e">rec</span> []<span style="color:#66d9ef">byte</span>, <span style="color:#a6e22e">final</span> <span style="color:#66d9ef">bool</span>) <span style="color:#66d9ef">error</span> {
+    <span style="color:#75715e">// When the last page flush failed the page will remain full.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// When the page is full, need to flush it before trying to add more records to it.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// 如果WAL的active page已满，则flush到file，并重置此page
+</span><span style="color:#75715e"></span>    <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">page</span>.<span style="color:#a6e22e">full</span>() {
+        <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">err</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">flushPage</span>(<span style="color:#66d9ef">true</span>); <span style="color:#a6e22e">err</span> <span style="color:#f92672">!=</span> <span style="color:#66d9ef">nil</span> {
+            <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">err</span>
+        }
+    }
+    <span style="color:#75715e">// If the record is too big to fit within the active page in the current
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// segment, terminate the active segment and advance to the next one.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// This ensures that records do not cross segment boundaries.
+</span><span style="color:#75715e"></span>    <span style="color:#a6e22e">left</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">page</span>.<span style="color:#a6e22e">remaining</span>() <span style="color:#f92672">-</span> <span style="color:#a6e22e">recordHeaderSize</span>                                   <span style="color:#75715e">// Free space in the active page.
+</span><span style="color:#75715e"></span>    <span style="color:#a6e22e">left</span> <span style="color:#f92672">+=</span> (<span style="color:#a6e22e">pageSize</span> <span style="color:#f92672">-</span> <span style="color:#a6e22e">recordHeaderSize</span>) <span style="color:#f92672">*</span> (<span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">pagesPerSegment</span>() <span style="color:#f92672">-</span> <span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">donePages</span> <span style="color:#f92672">-</span> <span style="color:#ae81ff">1</span>) <span style="color:#75715e">// Free pages in the active segment.
+</span><span style="color:#75715e"></span>
+    <span style="color:#75715e">// 如果record的长度大于active segment的剩余可用空间，则创建新的segment
+</span><span style="color:#75715e"></span>    <span style="color:#66d9ef">if</span> len(<span style="color:#a6e22e">rec</span>) &gt; <span style="color:#a6e22e">left</span> {
+        <span style="color:#75715e">// 1. 如果active page已分配大小不为0，则flush page到file。
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// 2. 创建新的segment file。
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// 3. 将上一个segment file的数据fsync到磁盘。
+</span><span style="color:#75715e"></span>        <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">err</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">nextSegment</span>(); <span style="color:#a6e22e">err</span> <span style="color:#f92672">!=</span> <span style="color:#66d9ef">nil</span> {
+            <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">err</span>
+        }
+    }
+
+    <span style="color:#a6e22e">compressed</span> <span style="color:#f92672">:=</span> <span style="color:#66d9ef">false</span>
+    <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">compress</span> <span style="color:#f92672">&amp;&amp;</span> len(<span style="color:#a6e22e">rec</span>) &gt; <span style="color:#ae81ff">0</span> {
+        <span style="color:#75715e">// The snappy library uses `len` to calculate if we need a new buffer.
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// In order to allocate as few buffers as possible make the length
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// equal to the capacity.
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// 如果WAL compress enabled，则将record数据编码为snappyBuf，
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// 将rec指向压缩后的snappyBuf数据记录。
+</span><span style="color:#75715e"></span>        <span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">snappyBuf</span> = <span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">snappyBuf</span>[:cap(<span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">snappyBuf</span>)]
+        <span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">snappyBuf</span> = <span style="color:#a6e22e">snappy</span>.<span style="color:#a6e22e">Encode</span>(<span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">snappyBuf</span>, <span style="color:#a6e22e">rec</span>)
+        <span style="color:#66d9ef">if</span> len(<span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">snappyBuf</span>) &lt; len(<span style="color:#a6e22e">rec</span>) {
+            <span style="color:#a6e22e">rec</span> = <span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">snappyBuf</span>
+            <span style="color:#a6e22e">compressed</span> = <span style="color:#66d9ef">true</span>
+        }
+    }
+
+    <span style="color:#75715e">// Populate as many pages as necessary to fit the record.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// Be careful to always do one pass to ensure we write zero-length records.
+</span><span style="color:#75715e"></span>    <span style="color:#66d9ef">for</span> <span style="color:#a6e22e">i</span> <span style="color:#f92672">:=</span> <span style="color:#ae81ff">0</span>; <span style="color:#a6e22e">i</span> <span style="color:#f92672">==</span> <span style="color:#ae81ff">0</span> <span style="color:#f92672">||</span> len(<span style="color:#a6e22e">rec</span>) &gt; <span style="color:#ae81ff">0</span>; <span style="color:#a6e22e">i</span><span style="color:#f92672">++</span> {
+        <span style="color:#a6e22e">p</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">page</span>
+
+        <span style="color:#75715e">// Find how much of the record we can fit into the page.
+</span><span style="color:#75715e"></span>        <span style="color:#66d9ef">var</span> (
+            <span style="color:#a6e22e">l</span>    = <span style="color:#a6e22e">min</span>(len(<span style="color:#a6e22e">rec</span>), (<span style="color:#a6e22e">pageSize</span><span style="color:#f92672">-</span><span style="color:#a6e22e">p</span>.<span style="color:#a6e22e">alloc</span>)<span style="color:#f92672">-</span><span style="color:#a6e22e">recordHeaderSize</span>)
+            <span style="color:#a6e22e">part</span> = <span style="color:#a6e22e">rec</span>[:<span style="color:#a6e22e">l</span>]
+            <span style="color:#75715e">// buf指向page.buf的offset为page.alloc
+</span><span style="color:#75715e"></span>            <span style="color:#a6e22e">buf</span>  = <span style="color:#a6e22e">p</span>.<span style="color:#a6e22e">buf</span>[<span style="color:#a6e22e">p</span>.<span style="color:#a6e22e">alloc</span>:] 
+            <span style="color:#a6e22e">typ</span>  <span style="color:#a6e22e">recType</span>
+        )
+
+        <span style="color:#66d9ef">switch</span> {
+        <span style="color:#66d9ef">case</span> <span style="color:#a6e22e">i</span> <span style="color:#f92672">==</span> <span style="color:#ae81ff">0</span> <span style="color:#f92672">&amp;&amp;</span> len(<span style="color:#a6e22e">part</span>) <span style="color:#f92672">==</span> len(<span style="color:#a6e22e">rec</span>):
+            <span style="color:#a6e22e">typ</span> = <span style="color:#a6e22e">recFull</span>
+        <span style="color:#66d9ef">case</span> len(<span style="color:#a6e22e">part</span>) <span style="color:#f92672">==</span> len(<span style="color:#a6e22e">rec</span>):
+            <span style="color:#a6e22e">typ</span> = <span style="color:#a6e22e">recLast</span>
+        <span style="color:#66d9ef">case</span> <span style="color:#a6e22e">i</span> <span style="color:#f92672">==</span> <span style="color:#ae81ff">0</span>:
+            <span style="color:#a6e22e">typ</span> = <span style="color:#a6e22e">recFirst</span>
+        <span style="color:#66d9ef">default</span>:
+            <span style="color:#a6e22e">typ</span> = <span style="color:#a6e22e">recMiddle</span>
+        }
+        <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">compressed</span> {
+            <span style="color:#a6e22e">typ</span> <span style="color:#f92672">|=</span> <span style="color:#a6e22e">snappyMask</span>
+        }
+        <span style="color:#75715e">// 判断record的type和是否compress，并将其写入buf的第一个字节。
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// 接着写入2字节的长度为min(len(record), (pageSize-p.alloc)-recordHeaderSize)，
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// 也就是说有可能record的长度大于active page所能分配的最大长度，
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// 这样record就会跨page，但是不能跨segment。
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// 然后写入4个字节的CRC
+</span><span style="color:#75715e"></span>        <span style="color:#a6e22e">buf</span>[<span style="color:#ae81ff">0</span>] = byte(<span style="color:#a6e22e">typ</span>)
+        <span style="color:#a6e22e">crc</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">crc32</span>.<span style="color:#a6e22e">Checksum</span>(<span style="color:#a6e22e">part</span>, <span style="color:#a6e22e">castagnoliTable</span>)
+        <span style="color:#a6e22e">binary</span>.<span style="color:#a6e22e">BigEndian</span>.<span style="color:#a6e22e">PutUint16</span>(<span style="color:#a6e22e">buf</span>[<span style="color:#ae81ff">1</span>:], uint16(len(<span style="color:#a6e22e">part</span>)))
+        <span style="color:#a6e22e">binary</span>.<span style="color:#a6e22e">BigEndian</span>.<span style="color:#a6e22e">PutUint32</span>(<span style="color:#a6e22e">buf</span>[<span style="color:#ae81ff">3</span>:], <span style="color:#a6e22e">crc</span>)
+
+        <span style="color:#75715e">// 紧接着header写入record数据记录，可能是一部分。
+</span><span style="color:#75715e"></span>        copy(<span style="color:#a6e22e">buf</span>[<span style="color:#a6e22e">recordHeaderSize</span>:], <span style="color:#a6e22e">part</span>)
+        <span style="color:#a6e22e">p</span>.<span style="color:#a6e22e">alloc</span> <span style="color:#f92672">+=</span> len(<span style="color:#a6e22e">part</span>) <span style="color:#f92672">+</span> <span style="color:#a6e22e">recordHeaderSize</span>
+
+        <span style="color:#75715e">// 如果page已满，则flush到file中。
+</span><span style="color:#75715e"></span>        <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">page</span>.<span style="color:#a6e22e">full</span>() {
+            <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">err</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">flushPage</span>(<span style="color:#66d9ef">true</span>); <span style="color:#a6e22e">err</span> <span style="color:#f92672">!=</span> <span style="color:#66d9ef">nil</span> {
+                <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">err</span>
+            }
+        }
+        <span style="color:#a6e22e">rec</span> = <span style="color:#a6e22e">rec</span>[<span style="color:#a6e22e">l</span>:]
+    }
+    
+    <span style="color:#75715e">// If it&#39;s the final record of the batch and the page is not empty, flush it.
+</span><span style="color:#75715e"></span>    <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">final</span> <span style="color:#f92672">&amp;&amp;</span> <span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">page</span>.<span style="color:#a6e22e">alloc</span> &gt; <span style="color:#ae81ff">0</span> {
+        <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">err</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">w</span>.<span style="color:#a6e22e">flushPage</span>(<span style="color:#66d9ef">false</span>); <span style="color:#a6e22e">err</span> <span style="color:#f92672">!=</span> <span style="color:#66d9ef">nil</span> {
+            <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">err</span>
+        }
+    }
+
+    <span style="color:#66d9ef">return</span> <span style="color:#66d9ef">nil</span>
+}
+</code></pre></div><h3 id="wal-reader">
+  WAL Reader
+  <a class="anchor" href="#wal-reader">#</a>
+</h3>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#75715e">// Reader reads WAL records from an io.Reader.
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">type</span> <span style="color:#a6e22e">Reader</span> <span style="color:#66d9ef">struct</span> {
+    <span style="color:#a6e22e">rdr</span>       <span style="color:#a6e22e">io</span>.<span style="color:#a6e22e">Reader</span>
+    <span style="color:#a6e22e">err</span>       <span style="color:#66d9ef">error</span>
+    <span style="color:#a6e22e">rec</span>       []<span style="color:#66d9ef">byte</span>
+    <span style="color:#a6e22e">snappyBuf</span> []<span style="color:#66d9ef">byte</span>
+    <span style="color:#a6e22e">buf</span>       [<span style="color:#a6e22e">pageSize</span>]<span style="color:#66d9ef">byte</span>
+    <span style="color:#a6e22e">total</span>     <span style="color:#66d9ef">int64</span>   <span style="color:#75715e">// Total bytes processed.
+</span><span style="color:#75715e"></span>    <span style="color:#a6e22e">curRecTyp</span> <span style="color:#a6e22e">recType</span> <span style="color:#75715e">// Used for checking that the last record is not torn.
+</span><span style="color:#75715e"></span>}
+</code></pre></div><p>其中Reader从rdr中读取records，相当于把io.Reader做了一层包装；buf为大小为pageSize的字节数组。</p>
+<pre tabindex="0"><code>+--------------------------------------------------+
+|                     Reader.buf                   |
++-----------------------------------+--------------+
+|               hdr                 |     buf      |
++-----------+----------+------------+--------------+
+| type &lt;1b&gt; | len &lt;2b&gt; | CRC32 &lt;4b&gt; | data &lt;bytes&gt; |
++-----------+----------+------------+--------------+
+
+</code></pre><p>the record fragment is encoded as:</p>
+<pre tabindex="0"><code>+-----------+----------+------------+--------------+
+| type &lt;1b&gt; | len &lt;2b&gt; | CRC32 &lt;4b&gt; | data &lt;bytes&gt; |
++-----------+----------+------------+--------------+
+</code></pre><p>The type flag has the following states:</p>
+<ul>
+<li><code>0</code>: rest of page will be empty</li>
+<li><code>1</code>: a full record encoded in a single fragment</li>
+<li><code>2</code>: first fragment of a record</li>
+<li><code>3</code>: middle fragment of a record</li>
+<li><code>4</code>: final fragment of a record</li>
+</ul>
+<p>其中type占用一个byte，由于type flag只有五种状态，3 bits就可以表示了。前4个 bit未分配，第5个bit表示是否<code>压缩</code>，最后三个bit表示<code>record type</code>。</p>
+<pre tabindex="0"><code>+--------------------+-------------------------------+------------------------+
+| 4 bits unallocated | 1 bit snappy compression flag |   3 bit record type    |
++--------------------+-------------------------------+------------------------+
+</code></pre><div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#75715e">// Next advances the reader to the next records and returns true if it exists.
+</span><span style="color:#75715e">// It must not be called again after it returned false.
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">func</span> (<span style="color:#a6e22e">r</span> <span style="color:#f92672">*</span><span style="color:#a6e22e">Reader</span>) <span style="color:#a6e22e">Next</span>() <span style="color:#66d9ef">bool</span> {
+    <span style="color:#a6e22e">err</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">next</span>()
+    <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">errors</span>.<span style="color:#a6e22e">Cause</span>(<span style="color:#a6e22e">err</span>) <span style="color:#f92672">==</span> <span style="color:#a6e22e">io</span>.<span style="color:#a6e22e">EOF</span> {
+        <span style="color:#75715e">// The last WAL segment record shouldn&#39;t be torn(should be full or last).
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// The last record would be torn after a crash just before
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// the last record part could be persisted to disk.
+</span><span style="color:#75715e"></span>        <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">curRecTyp</span> <span style="color:#f92672">==</span> <span style="color:#a6e22e">recFirst</span> <span style="color:#f92672">||</span> <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">curRecTyp</span> <span style="color:#f92672">==</span> <span style="color:#a6e22e">recMiddle</span> {
+            <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">err</span> = <span style="color:#a6e22e">errors</span>.<span style="color:#a6e22e">New</span>(<span style="color:#e6db74">&#34;last record is torn&#34;</span>)
+        }
+        <span style="color:#66d9ef">return</span> <span style="color:#66d9ef">false</span>
+    }
+    <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">err</span> = <span style="color:#a6e22e">err</span>
+    <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">err</span> <span style="color:#f92672">==</span> <span style="color:#66d9ef">nil</span>
+}
+
+<span style="color:#66d9ef">func</span> (<span style="color:#a6e22e">r</span> <span style="color:#f92672">*</span><span style="color:#a6e22e">Reader</span>) <span style="color:#a6e22e">next</span>() (<span style="color:#a6e22e">err</span> <span style="color:#66d9ef">error</span>) {
+    <span style="color:#75715e">// We have to use r.buf since allocating byte arrays here fails escape
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// analysis and ends up on the heap, even though it seemingly should not.
+</span><span style="color:#75715e"></span>    <span style="color:#75715e">// 前面7个byte代表header，后面的为data
+</span><span style="color:#75715e"></span>    <span style="color:#a6e22e">hdr</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">buf</span>[:<span style="color:#a6e22e">recordHeaderSize</span>]
+    <span style="color:#a6e22e">buf</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">buf</span>[<span style="color:#a6e22e">recordHeaderSize</span>:]
+
+    <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">rec</span> = <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">rec</span>[:<span style="color:#ae81ff">0</span>]
+    <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">snappyBuf</span> = <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">snappyBuf</span>[:<span style="color:#ae81ff">0</span>]
+
+    <span style="color:#a6e22e">i</span> <span style="color:#f92672">:=</span> <span style="color:#ae81ff">0</span>
+    <span style="color:#66d9ef">for</span> {
+        <span style="color:#75715e">// 首先从rdr中读取一个字节
+</span><span style="color:#75715e"></span>        <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">_</span>, <span style="color:#a6e22e">err</span> = <span style="color:#a6e22e">io</span>.<span style="color:#a6e22e">ReadFull</span>(<span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">rdr</span>, <span style="color:#a6e22e">hdr</span>[:<span style="color:#ae81ff">1</span>]); <span style="color:#a6e22e">err</span> <span style="color:#f92672">!=</span> <span style="color:#66d9ef">nil</span> {
+            <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">errors</span>.<span style="color:#a6e22e">Wrap</span>(<span style="color:#a6e22e">err</span>, <span style="color:#e6db74">&#34;read first header byte&#34;</span>)
+        }
+        <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">total</span><span style="color:#f92672">++</span>
+        <span style="color:#75715e">// 获取record type，并判断是否压缩
+</span><span style="color:#75715e"></span>        <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">curRecTyp</span> = <span style="color:#a6e22e">recTypeFromHeader</span>(<span style="color:#a6e22e">hdr</span>[<span style="color:#ae81ff">0</span>])
+        <span style="color:#a6e22e">compressed</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">hdr</span>[<span style="color:#ae81ff">0</span>]<span style="color:#f92672">&amp;</span><span style="color:#a6e22e">snappyMask</span> <span style="color:#f92672">!=</span> <span style="color:#ae81ff">0</span>
+
+        <span style="color:#75715e">// Gobble up zero bytes.
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// 如果record type为recPageTerm，代表后面page剩余数据全部为0填充。即第一个byte为type，后面全是0。
+</span><span style="color:#75715e"></span>        <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">curRecTyp</span> <span style="color:#f92672">==</span> <span style="color:#a6e22e">recPageTerm</span> {
+            <span style="color:#75715e">// recPageTerm is a single byte that indicates the rest of the page is padded.
+</span><span style="color:#75715e"></span>            <span style="color:#75715e">// If it&#39;s the first byte in a page, buf is too small and
+</span><span style="color:#75715e"></span>            <span style="color:#75715e">// needs to be resized to fit pageSize-1 bytes.
+</span><span style="color:#75715e"></span>            <span style="color:#a6e22e">buf</span> = <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">buf</span>[<span style="color:#ae81ff">1</span>:]
+
+            <span style="color:#75715e">// We are pedantic and check whether the zeros are actually up
+</span><span style="color:#75715e"></span>            <span style="color:#75715e">// to a page boundary.
+</span><span style="color:#75715e"></span>            <span style="color:#75715e">// It&#39;s not strictly necessary but may catch sketchy state early.
+</span><span style="color:#75715e"></span>            <span style="color:#a6e22e">k</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">pageSize</span> <span style="color:#f92672">-</span> (<span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">total</span> <span style="color:#f92672">%</span> <span style="color:#a6e22e">pageSize</span>)
+            <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">k</span> <span style="color:#f92672">==</span> <span style="color:#a6e22e">pageSize</span> {
+                <span style="color:#66d9ef">continue</span> <span style="color:#75715e">// Initial 0 byte was last page byte.
+</span><span style="color:#75715e"></span>            }
+            <span style="color:#a6e22e">n</span>, <span style="color:#a6e22e">err</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">io</span>.<span style="color:#a6e22e">ReadFull</span>(<span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">rdr</span>, <span style="color:#a6e22e">buf</span>[:<span style="color:#a6e22e">k</span>])
+            <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">err</span> <span style="color:#f92672">!=</span> <span style="color:#66d9ef">nil</span> {
+                <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">errors</span>.<span style="color:#a6e22e">Wrap</span>(<span style="color:#a6e22e">err</span>, <span style="color:#e6db74">&#34;read remaining zeros&#34;</span>)
+            }
+            <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">total</span> <span style="color:#f92672">+=</span> int64(<span style="color:#a6e22e">n</span>)
+
+            <span style="color:#66d9ef">for</span> <span style="color:#a6e22e">_</span>, <span style="color:#a6e22e">c</span> <span style="color:#f92672">:=</span> <span style="color:#66d9ef">range</span> <span style="color:#a6e22e">buf</span>[:<span style="color:#a6e22e">k</span>] {
+                <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">c</span> <span style="color:#f92672">!=</span> <span style="color:#ae81ff">0</span> {
+                    <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">errors</span>.<span style="color:#a6e22e">New</span>(<span style="color:#e6db74">&#34;unexpected non-zero byte in padded page&#34;</span>)
+                }
+            }
+            <span style="color:#66d9ef">continue</span>
+        }
+        <span style="color:#75715e">// 读取剩余的6个byte，分别代表length和crc
+</span><span style="color:#75715e"></span>        <span style="color:#a6e22e">n</span>, <span style="color:#a6e22e">err</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">io</span>.<span style="color:#a6e22e">ReadFull</span>(<span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">rdr</span>, <span style="color:#a6e22e">hdr</span>[<span style="color:#ae81ff">1</span>:])
+        <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">err</span> <span style="color:#f92672">!=</span> <span style="color:#66d9ef">nil</span> {
+            <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">errors</span>.<span style="color:#a6e22e">Wrap</span>(<span style="color:#a6e22e">err</span>, <span style="color:#e6db74">&#34;read remaining header&#34;</span>)
+        }
+        <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">total</span> <span style="color:#f92672">+=</span> int64(<span style="color:#a6e22e">n</span>)
+
+        <span style="color:#66d9ef">var</span> (
+            <span style="color:#a6e22e">length</span> = <span style="color:#a6e22e">binary</span>.<span style="color:#a6e22e">BigEndian</span>.<span style="color:#a6e22e">Uint16</span>(<span style="color:#a6e22e">hdr</span>[<span style="color:#ae81ff">1</span>:])
+            <span style="color:#a6e22e">crc</span>    = <span style="color:#a6e22e">binary</span>.<span style="color:#a6e22e">BigEndian</span>.<span style="color:#a6e22e">Uint32</span>(<span style="color:#a6e22e">hdr</span>[<span style="color:#ae81ff">3</span>:])
+        )
+
+        <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">length</span> &gt; <span style="color:#a6e22e">pageSize</span><span style="color:#f92672">-</span><span style="color:#a6e22e">recordHeaderSize</span> {
+            <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">errors</span>.<span style="color:#a6e22e">Errorf</span>(<span style="color:#e6db74">&#34;invalid record size %d&#34;</span>, <span style="color:#a6e22e">length</span>)
+        }
+        <span style="color:#75715e">// 读取长度为length的数据，并计算其crc值是否与header中的crc相等。
+</span><span style="color:#75715e"></span>        <span style="color:#a6e22e">n</span>, <span style="color:#a6e22e">err</span> = <span style="color:#a6e22e">io</span>.<span style="color:#a6e22e">ReadFull</span>(<span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">rdr</span>, <span style="color:#a6e22e">buf</span>[:<span style="color:#a6e22e">length</span>])
+        <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">err</span> <span style="color:#f92672">!=</span> <span style="color:#66d9ef">nil</span> {
+            <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">err</span>
+        }
+        <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">total</span> <span style="color:#f92672">+=</span> int64(<span style="color:#a6e22e">n</span>)
+
+        <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">n</span> <span style="color:#f92672">!=</span> int(<span style="color:#a6e22e">length</span>) {
+            <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">errors</span>.<span style="color:#a6e22e">Errorf</span>(<span style="color:#e6db74">&#34;invalid size: expected %d, got %d&#34;</span>, <span style="color:#a6e22e">length</span>, <span style="color:#a6e22e">n</span>)
+        }
+        <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">c</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">crc32</span>.<span style="color:#a6e22e">Checksum</span>(<span style="color:#a6e22e">buf</span>[:<span style="color:#a6e22e">length</span>], <span style="color:#a6e22e">castagnoliTable</span>); <span style="color:#a6e22e">c</span> <span style="color:#f92672">!=</span> <span style="color:#a6e22e">crc</span> {
+            <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">errors</span>.<span style="color:#a6e22e">Errorf</span>(<span style="color:#e6db74">&#34;unexpected checksum %x, expected %x&#34;</span>, <span style="color:#a6e22e">c</span>, <span style="color:#a6e22e">crc</span>)
+        }
+        
+        <span style="color:#75715e">// 如果为压缩数据，则将其存放在snappyBuf中，后面读取完成后进行decode。
+</span><span style="color:#75715e"></span>        <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">compressed</span> {
+            <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">snappyBuf</span> = append(<span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">snappyBuf</span>, <span style="color:#a6e22e">buf</span>[:<span style="color:#a6e22e">length</span>]<span style="color:#f92672">...</span>)
+        } <span style="color:#66d9ef">else</span> {
+            <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">rec</span> = append(<span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">rec</span>, <span style="color:#a6e22e">buf</span>[:<span style="color:#a6e22e">length</span>]<span style="color:#f92672">...</span>)
+        }
+
+        <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">err</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">validateRecord</span>(<span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">curRecTyp</span>, <span style="color:#a6e22e">i</span>); <span style="color:#a6e22e">err</span> <span style="color:#f92672">!=</span> <span style="color:#66d9ef">nil</span> {
+            <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">err</span>
+        }
+        <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">curRecTyp</span> <span style="color:#f92672">==</span> <span style="color:#a6e22e">recLast</span> <span style="color:#f92672">||</span> <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">curRecTyp</span> <span style="color:#f92672">==</span> <span style="color:#a6e22e">recFull</span> {
+            <span style="color:#66d9ef">if</span> <span style="color:#a6e22e">compressed</span> <span style="color:#f92672">&amp;&amp;</span> len(<span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">snappyBuf</span>) &gt; <span style="color:#ae81ff">0</span> {
+                <span style="color:#75715e">// The snappy library uses `len` to calculate if we need a new buffer.
+</span><span style="color:#75715e"></span>                <span style="color:#75715e">// In order to allocate as few buffers as possible make the length
+</span><span style="color:#75715e"></span>                <span style="color:#75715e">// equal to the capacity.
+</span><span style="color:#75715e"></span>                <span style="color:#75715e">// 将压缩的数据进行解码。
+</span><span style="color:#75715e"></span>                <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">rec</span> = <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">rec</span>[:cap(<span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">rec</span>)]
+                <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">rec</span>, <span style="color:#a6e22e">err</span> = <span style="color:#a6e22e">snappy</span>.<span style="color:#a6e22e">Decode</span>(<span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">rec</span>, <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">snappyBuf</span>)
+                <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">err</span>
+            }
+            <span style="color:#66d9ef">return</span> <span style="color:#66d9ef">nil</span>
+        }
+        <span style="color:#75715e">// Only increment i for non-zero records since we use it
+</span><span style="color:#75715e"></span>        <span style="color:#75715e">// to determine valid content record sequences.
+</span><span style="color:#75715e"></span>        <span style="color:#a6e22e">i</span><span style="color:#f92672">++</span>
+    }
+}
+</code></pre></div><p><code>Next</code>方法从<code>rdr</code>中读取record，如果存在则返回true。每次最多读取<code>pageSize-recordHeaderSize</code>大小的数据，直到读取完整的<code>record</code>，如果数据被压缩，则需要<code>decode</code>，最后的record存储在<code>Reader.rec</code>字段中。</p>
+<h4 id="问题点">
+  问题点
+  <a class="anchor" href="#%e9%97%ae%e9%a2%98%e7%82%b9">#</a>
+</h4>
+<ol>
+<li>为什么需要<code>recPageTerm</code>类型，这样是不是浪费了一整个page大小的空间？</li>
+<li><code>record</code>代表什么？</li>
+<li>为什么<code>length</code>不能大于<code>pageSize-recordHeaderSize</code>？</li>
+<li>record的大小会大于segment吗？</li>
+</ol>
+<hr>
+<h2 id="references">
+  References
+  <a class="anchor" href="#references">#</a>
+</h2>
+<ul>
+<li><a href="https://github.com/prometheus/prometheus/blob/master/tsdb/docs/format/wal.md">WAL disk format</a></li>
+<li><a href="https://www.jianshu.com/p/e0144be9692a">prometheus tsdb部分源码阅读之wal.LogSeries</a></li>
+<li><a href="https://segmentfault.com/a/1190000020500985?utm_source=tag-newest">详解varint编码原理</a></li>
+<li><a href="https://github.com/facebook/rocksdb/wiki/Write-Ahead-Log-File-Format">RocksDB WAL file format</a></li>
+</ul>
+</article>
+ 
+      
+
+      <footer class="book-footer">
+        
+  <div class="flex flex-wrap justify-between">
+
+
+
+
+
+</div>
+
+
+
+  <script>(function(){function a(c){const a=window.getSelection(),b=document.createRange();b.selectNodeContents(c),a.removeAllRanges(),a.addRange(b)}document.querySelectorAll("pre code").forEach(b=>{b.addEventListener("click",function(c){a(b.parentElement),navigator.clipboard&&navigator.clipboard.writeText(b.parentElement.textContent)})})})()</script>
+
+
+ 
+        
+      </footer>
+
+      
+  
+  <div class="book-comments">
+
+</div>
+  
+ 
+
+      <label for="menu-control" class="hidden book-menu-overlay"></label>
+    </div>
+
+    
+    <aside class="book-toc">
+      <div class="book-toc-content">
+        
+  
+<nav id="TableOfContents">
+  <ul>
+    <li><a href="#概述">概述</a></li>
+    <li><a href="#prometheus-storage-hierarchy">Prometheus storage hierarchy</a></li>
+    <li><a href="#create-segment">Create Segment</a></li>
+    <li><a href="#wal-repair">WAL Repair</a>
+      <ul>
+        <li><a href="#wal-reader">WAL Reader</a></li>
+      </ul>
+    </li>
+    <li><a href="#references">References</a></li>
+  </ul>
+</nav>
+
+
+ 
+      </div>
+    </aside>
+    
+  </main>
+
+  
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+

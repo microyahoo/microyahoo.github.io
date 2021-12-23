@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="AlertManager #   Architecture #     Alertmanager作为一个独立的组件，负责接收并处理来自Prometheus Server(也可以是其它的客户端程序)的告警信息。Alertmanager可以对这些告警信息进行进一步的处理，比如当接收到大量重复告警时能够消除重复的告警信息，同时对告警信息进行分组并且路由到正确的通知方，Prometheus内置了对邮件，Slack等多种通知方式的支持，同时还支持与Webhook的集成，以支持更多定制化的场景。同时AlertManager还提供了静默和告警抑制机制来对告警通知行为进行优化。
+ 客户端通过POST请求向AlertManager推送告警信息。 每条告警信息中的labels可用于唯一识别告警信息并用于去重。    AlertManager主要分为两个部分，路由(router)和接收器(receiver)。告警消息先被经过路由树，然后被分配到对应的接收器中。路由树是由预先设定的路由规则生成的。其高可用架构如上图所示，具体流程如下：
+ Prometheus会通过调用AlertManager提供的告警接口将原始的告警消息发送到AlertManager。 AlertManager的API除了接收告警，还接收静默请求，将其分别保存到各自的provider里。 provider提供了一个订阅（subscribe）接口，这样Dispatcher组件便可以获取告警数据，并对数据进行分组，通过用户预先设置的规则进入告警抑制阶段或静默阶段。 如果通过了上面的告警静默阶段，则进入路由分发阶段，最终发送通知。    上报数据格式 #  [ { &quot;labels&quot;: { &quot;alertname&quot;: &quot;&lt;requiredAlertName&gt;&quot;, &quot;&lt;labelname&gt;&quot;: &quot;&lt;labelvalue&gt;&quot;, ... }, &quot;annotations&quot;: { &quot;&lt;labelname&gt;&quot;: &quot;&lt;labelvalue&gt;&quot;, }, &quot;startsAt&quot;: &quot;&lt;rfc3339&gt;&quot;, &quot;endsAt&quot;: &quot;&lt;rfc3339&gt;&quot;, &quot;generatorURL&quot;: &quot;&lt;generator_url&gt;&quot; }, ... ]  其中：  告警信息的Fingerprint是通过labels来进行计算的。 startAt和endsAt在provider的告警合并会用到。     Alert Provider #   Prometheus或者告警发送系统可以通过API的方式发送给Alertmanager，收到告警后将告警分别存储在Alert Provider中（当前实现是存储在内存中，可以通过接口的方式自行实现其他存储方式比如MySQL或者ES）。 已解决的alerts会定期地从provider中清除，用户可以定义相应的回调函数，在alerts被删除时进行相应的回调处理。 Alert Provider收到告警信息后对相同的指标数据进行合并处理。  // Alerts gives access to a set of alerts.">
+<meta name="theme-color" content="#FFFFFF">
+<meta name="color-scheme" content="light dark"><meta property="og:title" content="" />
+<meta property="og:description" content="AlertManager #   Architecture #     Alertmanager作为一个独立的组件，负责接收并处理来自Prometheus Server(也可以是其它的客户端程序)的告警信息。Alertmanager可以对这些告警信息进行进一步的处理，比如当接收到大量重复告警时能够消除重复的告警信息，同时对告警信息进行分组并且路由到正确的通知方，Prometheus内置了对邮件，Slack等多种通知方式的支持，同时还支持与Webhook的集成，以支持更多定制化的场景。同时AlertManager还提供了静默和告警抑制机制来对告警通知行为进行优化。
+ 客户端通过POST请求向AlertManager推送告警信息。 每条告警信息中的labels可用于唯一识别告警信息并用于去重。    AlertManager主要分为两个部分，路由(router)和接收器(receiver)。告警消息先被经过路由树，然后被分配到对应的接收器中。路由树是由预先设定的路由规则生成的。其高可用架构如上图所示，具体流程如下：
+ Prometheus会通过调用AlertManager提供的告警接口将原始的告警消息发送到AlertManager。 AlertManager的API除了接收告警，还接收静默请求，将其分别保存到各自的provider里。 provider提供了一个订阅（subscribe）接口，这样Dispatcher组件便可以获取告警数据，并对数据进行分组，通过用户预先设置的规则进入告警抑制阶段或静默阶段。 如果通过了上面的告警静默阶段，则进入路由分发阶段，最终发送通知。    上报数据格式 #  [ { &quot;labels&quot;: { &quot;alertname&quot;: &quot;&lt;requiredAlertName&gt;&quot;, &quot;&lt;labelname&gt;&quot;: &quot;&lt;labelvalue&gt;&quot;, ... }, &quot;annotations&quot;: { &quot;&lt;labelname&gt;&quot;: &quot;&lt;labelvalue&gt;&quot;, }, &quot;startsAt&quot;: &quot;&lt;rfc3339&gt;&quot;, &quot;endsAt&quot;: &quot;&lt;rfc3339&gt;&quot;, &quot;generatorURL&quot;: &quot;&lt;generator_url&gt;&quot; }, ... ]  其中：  告警信息的Fingerprint是通过labels来进行计算的。 startAt和endsAt在provider的告警合并会用到。     Alert Provider #   Prometheus或者告警发送系统可以通过API的方式发送给Alertmanager，收到告警后将告警分别存储在Alert Provider中（当前实现是存储在内存中，可以通过接口的方式自行实现其他存储方式比如MySQL或者ES）。 已解决的alerts会定期地从provider中清除，用户可以定义相应的回调函数，在alerts被删除时进行相应的回调处理。 Alert Provider收到告警信息后对相同的指标数据进行合并处理。  // Alerts gives access to a set of alerts." />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="http://example.org/posts/alertmanager/" /><meta property="article:section" content="posts" />
+
+
+
+<title>Alert Manager | 酱油王</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/favicon.png" type="image/x-icon">
+<link rel="stylesheet" href="/book.min.46181bc93375ba932026e753b37c40e6ff8bb16a9ef770c78bcc663e4577b1ba.css" integrity="sha256-RhgbyTN1upMgJudTs3xA5v&#43;LsWqe93DHi8xmPkV3sbo=" crossorigin="anonymous">
+  <script defer src="/flexsearch.min.js"></script>
+  <script defer src="/en.search.min.e3d1bbac78330f1cc70982a957603bba2ca132f3b1f8b160e8efe21defc8e54b.js" integrity="sha256-49G7rHgzDxzHCYKpV2A7uiyhMvOx&#43;LFg6O/iHe/I5Us=" crossorigin="anonymous"></script>
+<!--
+Made with Book Theme
+https://github.com/alex-shpak/hugo-book
+-->
+  
+</head>
+<body dir="ltr">
+  <input type="checkbox" class="hidden toggle" id="menu-control" />
+  <input type="checkbox" class="hidden toggle" id="toc-control" />
+  <main class="container flex">
+    <aside class="book-menu">
+      <div class="book-menu-content">
+        
+  <nav>
+<h2 class="book-brand">
+  <a class="flex align-center" href="/"><span>酱油王</span>
+  </a>
+</h2>
+
+
+<div class="book-search">
+  <input type="text" id="book-search-input" placeholder="Search" aria-label="Search" maxlength="64" data-hotkeys="s/" />
+  <div class="book-search-spinner hidden"></div>
+  <ul id="book-search-results"></ul>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+  
+<ul>
+  
+  <li>
+    <a href="/posts/" >
+        Blog
+      </a>
+  </li>
+  
+</ul>
+
+
+
+
+
+
+</nav>
+
+
+
+
+  <script>(function(){var a=document.querySelector("aside .book-menu-content");addEventListener("beforeunload",function(b){localStorage.setItem("menu.scrollTop",a.scrollTop)}),a.scrollTop=localStorage.getItem("menu.scrollTop")})()</script>
+
+
+ 
+      </div>
+    </aside>
+
+    <div class="book-page">
+      <header class="book-header">
+        
+  <div class="flex align-center justify-between">
+  <label for="menu-control">
+    <img src="/svg/menu.svg" class="book-icon" alt="Menu" />
+  </label>
+
+  <strong>Alert Manager</strong>
+
+  <label for="toc-control">
+    
+    <img src="/svg/toc.svg" class="book-icon" alt="Table of Contents" />
+    
+  </label>
+</div>
+
+
+  
+  <aside class="hidden clearfix">
+    
+  
+<nav id="TableOfContents">
+  <ul>
+    <li><a href="#alertmanager">AlertManager</a>
+      <ul>
+        <li><a href="#architecture">Architecture</a></li>
+        <li><a href="#alert-provider">Alert Provider</a></li>
+        <li><a href="#silence-provider">Silence Provider</a></li>
+        <li><a href="#dispatcher">Dispatcher</a></li>
+        <li><a href="#inhibitor">Inhibitor</a></li>
+        <li><a href="#silencer">Silencer</a></li>
+        <li><a href="#notify-provider">Notify Provider</a></li>
+        <li><a href="#router">Router</a></li>
+        <li><a href="#receiver-stage">Receiver Stage</a></li>
+        <li><a href="#examples">Examples</a></li>
+        <li><a href="#references">References</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+
+
+
+  </aside>
+  
+ 
+      </header>
+
+      
+      
+<article class="markdown">
+  <h1>
+    <a href="/posts/alertmanager/">Alert Manager</a>
+  </h1>
+  
+
+
+  
+
+  
+
+
+
+<h2 id="alertmanager">
+  AlertManager
+  <a class="anchor" href="#alertmanager">#</a>
+</h2>
+<hr>
+<h3 id="architecture">
+  Architecture
+  <a class="anchor" href="#architecture">#</a>
+</h3>
+<p><img src="https://github.com/prometheus/alertmanager/raw/main/doc/arch.svg" alt="image" />
+<img src="images/alertmanager_arch.svg" alt="arch" /></p>
+<hr>
+<ul>
+<li>
+<p>Alertmanager作为一个独立的组件，负责接收并处理来自Prometheus Server(也可以是其它的客户端程序)的告警信息。Alertmanager可以对这些告警信息进行进一步的处理，比如当接收到大量重复告警时能够消除重复的告警信息，同时对告警信息进行分组并且路由到正确的通知方，Prometheus内置了对邮件，Slack等多种通知方式的支持，同时还支持与Webhook的集成，以支持更多定制化的场景。同时AlertManager还提供了静默和告警抑制机制来对告警通知行为进行优化。</p>
+<ul>
+<li>客户端通过<code>POST</code>请求向AlertManager推送告警信息。</li>
+<li>每条告警信息中的<code>labels</code>可用于唯一识别告警信息并用于去重。</li>
+</ul>
+</li>
+<li>
+<p>AlertManager主要分为两个部分，路由(<code>router</code>)和接收器(<code>receiver</code>)。告警消息先被经过路由树，然后被分配到对应的接收器中。路由树是由预先设定的路由规则生成的。其高可用架构如上图所示，具体流程如下：</p>
+<ul>
+<li>Prometheus会通过调用AlertManager提供的告警接口将原始的告警消息发送到AlertManager。</li>
+<li>AlertManager的API除了接收告警，还接收静默请求，将其分别保存到各自的<code>provider</code>里。</li>
+<li><code>provider</code>提供了一个订阅（<code>subscribe</code>）接口，这样<code>Dispatcher</code>组件便可以获取告警数据，并对数据进行分组，通过用户预先设置的规则进入告警抑制阶段或静默阶段。</li>
+<li>如果通过了上面的告警静默阶段，则进入路由分发阶段，最终发送通知。</li>
+</ul>
+</li>
+</ul>
+<h4 id="上报数据格式">
+  上报数据格式
+  <a class="anchor" href="#%e4%b8%8a%e6%8a%a5%e6%95%b0%e6%8d%ae%e6%a0%bc%e5%bc%8f">#</a>
+</h4>
+<pre tabindex="0"><code>[
+  {
+    &quot;labels&quot;: {
+      &quot;alertname&quot;: &quot;&lt;requiredAlertName&gt;&quot;,
+      &quot;&lt;labelname&gt;&quot;: &quot;&lt;labelvalue&gt;&quot;,
+      ...
+    },
+    &quot;annotations&quot;: {
+      &quot;&lt;labelname&gt;&quot;: &quot;&lt;labelvalue&gt;&quot;,
+    },
+    &quot;startsAt&quot;: &quot;&lt;rfc3339&gt;&quot;,
+    &quot;endsAt&quot;: &quot;&lt;rfc3339&gt;&quot;,
+    &quot;generatorURL&quot;: &quot;&lt;generator_url&gt;&quot;
+  },
+  ...
+]
+</code></pre><ul>
+<li>其中：
+<ul>
+<li>告警信息的<code>Fingerprint</code>是通过<code>labels</code>来进行计算的。</li>
+<li><code>startAt</code>和<code>endsAt</code>在<code>provider</code>的告警合并会用到。</li>
+</ul>
+</li>
+</ul>
+<hr>
+<h3 id="alert-provider">
+  Alert Provider
+  <a class="anchor" href="#alert-provider">#</a>
+</h3>
+<ul>
+<li>Prometheus或者告警发送系统可以通过API的方式发送给Alertmanager，收到告警后将告警分别存储在<code>Alert Provider</code>中（当前实现是存储在<code>内存</code>中，可以通过接口的方式自行实现其他存储方式比如MySQL或者ES）。</li>
+<li>已解决的<code>alerts</code>会定期地从<code>provider</code>中清除，用户可以定义相应的回调函数，在<code>alerts</code>被删除时进行相应的回调处理。</li>
+<li><code>Alert Provider</code>收到告警信息后对相同的指标数据进行合并处理。</li>
+</ul>
+<pre tabindex="0"><code>// Alerts gives access to a set of alerts. All methods are goroutine-safe.
+type Alerts interface {
+    // Subscribe returns an iterator over active alerts that have not been
+    // resolved and successfully notified about.
+    // They are not guaranteed to be in chronological order.
+    Subscribe() AlertIterator
+    // GetPending returns an iterator over all alerts that have
+    // pending notifications.
+    GetPending() AlertIterator
+    // Get returns the alert for a given fingerprint.
+    Get(model.Fingerprint) (*types.Alert, error)
+    // Put adds the given alert to the set.
+    Put(...*types.Alert) error
+}
+</code></pre><hr>
+<h3 id="silence-provider">
+  Silence Provider
+  <a class="anchor" href="#silence-provider">#</a>
+</h3>
+<hr>
+<h3 id="dispatcher">
+  Dispatcher
+  <a class="anchor" href="#dispatcher">#</a>
+</h3>
+<ul>
+<li><code>Dispatcher</code> sorts incoming alerts into aggregation groups and assigns the correct notifiers to each.</li>
+<li>AlertManager内部的<code>Dispatcher</code>通过订阅的方式获得告警信息更新（获得<code>Alerts的迭代器</code>，通过for循环不断的获得发送到信道中的<code>Alerts</code>, 通过route的match函数获得匹配的route对象（比如基于标签的正则表达，传递到不同的邮件或者slack信道路由）,并且每隔一段时间将执行一次清理操作（当<code>aggregate group</code>中的告警数量为空的时候），删除之前的记录。收到的Alert通过标签匹配的方式被送到不同的聚合组中等待<code>Pipeline</code>流程进行处理。</li>
+</ul>
+<h4 id="aggregate-group">
+  Aggregate group
+  <a class="anchor" href="#aggregate-group">#</a>
+</h4>
+<ul>
+<li>aggrGroup aggregates alert fingerprints into groups to which a common set of routing options applies.
+It emits notifications in the specified intervals.</li>
+<li>聚合组<code>aggregate group</code>用来管理具有相同属性信息的告警，通过将相同类型的告警进行分组可以统一的管理，因为有时候告警处理是大量同时出现的（比如一个数据中心的失效将导致成百上千的告警产生，通过分组可以聚合相同标签到一个邮件或者接收者中）。分组创建将依赖于处理<code>route</code>路由和告警的<code>labels</code>标签，不同的告警<code>labels</code>将产生不同的聚合组，所有接收到的告警将首先计算一个聚合组的<code>Fingerprint</code>如果找到则直接插入到该组，否则创建一个新的聚合组，每次新创建的聚合组都会启动一个goroutine来执行实际的<code>pipeline work</code>.</li>
+</ul>
+<hr>
+<h3 id="inhibitor">
+  Inhibitor
+  <a class="anchor" href="#inhibitor">#</a>
+</h3>
+<ul>
+<li>An <code>Inhibitor</code> determines whether a given <code>label set</code> is muted based on the currently active alerts and a set of <code>inhibition rules</code>. It implements the <code>Muter</code> interface.</li>
+<li><code>Inhibitor</code>用于管理相同的告警配置， <del>比如下面的配置定义了当告警名称alertname一致的时候，如果严重告警存在的时候，途同级别告警将被过滤掉。</del></li>
+<li>查询流程上将获得的alert的label进行检查，匹配检查的内容满足target匹配但是source不匹配的标记为Inhibited.</li>
+</ul>
+<hr>
+<h3 id="silencer">
+  Silencer
+  <a class="anchor" href="#silencer">#</a>
+</h3>
+<ul>
+<li><code>Silencer</code>用来取消告警，比如直接配置告警在某一段时间内不触发任何消息，可以基于正则表达式的匹配，该配置可以通过alertmanager的WebUI或者API接口配置。</li>
+<li>当流程传递到<code>Silence</code>步骤时候，<code>Silence</code>模块将循环检查每一个告警是否满足匹配，<del>比如设置某一个告警标签出现后取消告警。当查询结束后返回一个sils（Silence的结构体，用来指定某一类告警的Silence在一段时间内的处理对象。）一个告警可能会被多个Silence同时管理。</del></li>
+<li>同时要实现集群管理，彼此之间的Silence状态也要共享（告警发送给多个AM），因此系统设计的时候加入了SilenceProvider来进行集群之间的Silence管理,彼此之间通过protoBuf来进行数据状态的同步。同时集群在接收到告警后也要进行通知，告知其他的节点关于告警的处理状态，防止多个通知同时被发送。</li>
+</ul>
+<hr>
+<h3 id="notify-provider">
+  Notify Provider
+  <a class="anchor" href="#notify-provider">#</a>
+</h3>
+<hr>
+<h3 id="router">
+  Router
+  <a class="anchor" href="#router">#</a>
+</h3>
+<hr>
+<h3 id="receiver-stage">
+  Receiver Stage
+  <a class="anchor" href="#receiver-stage">#</a>
+</h3>
+<h4 id="wait">
+  Wait
+  <a class="anchor" href="#wait">#</a>
+</h4>
+<ul>
+<li>等待间隔用来设置发送告警的等待时间，对于集群操作中，需要根据不同的peer设置不同的超时时间，如果仅仅一个Server本身，等待间隔设置为0；</li>
+</ul>
+<h4 id="dedup">
+  Dedup
+  <a class="anchor" href="#dedup">#</a>
+</h4>
+<ul>
+<li><code>Dedup Stage</code>用于管理告警的去重，传递的参数中包含了一个<code>NotificationLog</code>, 用来保存告警的发送记录。当有多个机器组成集群的时候，<code>NotificationLog</code>会通过协议去进行通信，传递彼此的记录信息，加入集群中的A如果发送了告警，该记录会传递给B机器，并进行<code>merge</code>操作，这样B机器在发送告警的时候如果查询已经发送，则不再进行告警发送。</li>
+</ul>
+<h4 id="retry">
+  Retry
+  <a class="anchor" href="#retry">#</a>
+</h4>
+<ul>
+<li><code>Retry Stage</code>利用<code>backoff</code>策略来管理告警的重发，对于没有发送成功的告警将不断重试，直到超时。</li>
+</ul>
+<h4 id="set-notify">
+  Set Notify
+  <a class="anchor" href="#set-notify">#</a>
+</h4>
+<ul>
+<li>
+<p><code>Set Notifies Stage</code>用来设置发送告警的信息到<code>nfLog</code>，该模块仅仅用于被该<code>Alert Manager</code>发送的告警的记录（<code>Retry</code>组件传递的<code>alerts</code>和<code>Dedup</code>组件中发送出去的告警信息）。</p>
+</li>
+<li>
+<p><code>Integration</code>定义一个集成路由组件，包含用户的配置信息和名称以及发送告警的实现。自定义的notify路由需要满足该Notifier接口，实现Notify方法。</p>
+</li>
+</ul>
+<hr>
+<h3 id="examples">
+  Examples
+  <a class="anchor" href="#examples">#</a>
+</h3>
+<pre tabindex="0"><code>groups:
+
+- name: httpd
+  rules:
+  - alert: httpd_down
+    expr: probe_success{instance=&quot;http://httpd:80&quot;,job=&quot;httpd&quot;} == 0
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      summary: &quot;httpd is down&quot;
+
+</code></pre><ul>
+<li>Prometheus Server will wait for <em>1m</em> and if the expression meets the condition for 1m, now Prometheus Server has to fire alert and forward to AlertManager. Until now, Prometheus knows how to connect to AlertManager and when to fire and forward alerts to AlertManager.</li>
+</ul>
+<pre tabindex="0"><code>route:
+  repeat_interval: 2h
+  receiver: email-1
+  routes:
+    - match:
+        alertname: httpd_down
+      receiver: email-1
+
+    - match:
+        alertname: nginx_down
+      receiver: email-2
+</code></pre><ul>
+<li>These routes and receivers are defined in the AlertManager configuration file by the parent element called <strong>route</strong>. The parent route element has child <strong>routes</strong> which an alert follows in order to reach to its receiver based upon the <em>match label</em> as we will see in a bit.</li>
+</ul>
+<pre tabindex="0"><code>http://localhost:9090/api/v1/alertmanagers
+{
+  &quot;status&quot;: &quot;success&quot;,
+  &quot;data&quot;: {
+    &quot;activeAlertmanagers&quot;: [
+      {
+        &quot;url&quot;: &quot;http://127.0.0.1:9093/api/v1/alerts&quot;
+      }
+    ],
+    &quot;droppedAlertmanagers&quot;: []
+  }
+}
+</code></pre><pre tabindex="0"><code>curl -X GET http://10.255.101.73:9090/api/v1/alerts
+{
+  &quot;status&quot;: &quot;success&quot;,
+  &quot;data&quot;: {
+    &quot;alerts&quot;: [
+      {
+        &quot;labels&quot;: {
+          &quot;alertname&quot;: &quot;内存使用率过高&quot;,
+          &quot;instance&quot;: &quot;127.0.0.1:9100&quot;,
+          &quot;job&quot;: &quot;node&quot;,
+          &quot;severity&quot;: &quot;warning&quot;
+        },
+        &quot;annotations&quot;: {
+          &quot;description&quot;: &quot;127.0.0.1:9100 of job node内存使用率超过80%,当前使用率[59.74335527485338].&quot;,
+          &quot;summary&quot;: &quot;Instance 127.0.0.1:9100 内存使用率过高&quot;
+        },
+        &quot;state&quot;: &quot;firing&quot;,
+        &quot;activeAt&quot;: &quot;2019-08-23T11:27:34.027571952Z&quot;,
+        &quot;value&quot;: 59.74335527485338
+      }
+    ]
+  }
+}
+</code></pre><pre tabindex="0"><code>http://10.255.101.73:9093/api/v2/alerts
+[
+  {
+    &quot;annotations&quot;: {
+      &quot;description&quot;: &quot;10.255.101.74:8051 of job default go_goroutines &gt; 100,当前go_goroutines: [137].&quot;,
+      &quot;summary&quot;: &quot;Instance 10.255.101.74:8051 go_goroutines &gt; 100&quot;
+    },
+    &quot;endsAt&quot;: &quot;2019-08-31T06:19:27.344Z&quot;,
+    &quot;fingerprint&quot;: &quot;0d38358ac4713623&quot;,
+    &quot;receivers&quot;: [
+      {
+        &quot;name&quot;: &quot;default-receiver&quot;
+      }
+    ],
+    &quot;startsAt&quot;: &quot;2019-08-23T11:28:27.344Z&quot;,
+    &quot;status&quot;: {
+      &quot;inhibitedBy&quot;: [],
+      &quot;silencedBy&quot;: [],
+      &quot;state&quot;: &quot;active&quot;
+    },
+    &quot;updatedAt&quot;: &quot;2019-08-31T14:16:27.348+08:00&quot;,
+    &quot;generatorURL&quot;: &quot;http://ceph-1:9090/graph?g0.expr=go_goroutines+%3E+100&amp;g0.tab=1&quot;,
+    &quot;labels&quot;: {
+      &quot;alertname&quot;: &quot;go_goroutines大于100&quot;,
+      &quot;instance&quot;: &quot;10.255.101.74:8051&quot;,
+      &quot;job&quot;: &quot;default&quot;,
+      &quot;severity&quot;: &quot;warning&quot;
+    }
+  }
+]
+</code></pre><pre tabindex="0"><code>http://10.255.101.73:9093/api/v1/alerts
+{
+  &quot;status&quot;: &quot;success&quot;,
+  &quot;data&quot;: [
+    {
+      &quot;labels&quot;: {
+        &quot;alertname&quot;: &quot;go_goroutines大于100&quot;,
+        &quot;instance&quot;: &quot;10.255.101.74:8051&quot;,
+        &quot;job&quot;: &quot;default&quot;,
+        &quot;severity&quot;: &quot;warning&quot;
+      },
+      &quot;annotations&quot;: {
+        &quot;description&quot;: &quot;10.255.101.74:8051 of job default go_goroutines &gt; 100,当前go_goroutines: [135].&quot;,
+        &quot;summary&quot;: &quot;Instance 10.255.101.74:8051 go_goroutines &gt; 100&quot;
+      },
+      &quot;startsAt&quot;: &quot;2019-08-23T11:28:27.344378042Z&quot;,
+      &quot;endsAt&quot;: &quot;2019-08-31T06:21:27.344378042Z&quot;,
+      &quot;generatorURL&quot;: &quot;http://ceph-1:9090/graph?g0.expr=go_goroutines+%3E+100&amp;g0.tab=1&quot;,
+      &quot;status&quot;: {
+        &quot;state&quot;: &quot;active&quot;,
+        &quot;silencedBy&quot;: [],
+        &quot;inhibitedBy&quot;: []
+      },
+      &quot;receivers&quot;: [
+        &quot;default-receiver&quot;
+      ],
+      &quot;fingerprint&quot;: &quot;0d38358ac4713623&quot;
+    }
+  ]
+}
+</code></pre><h3 id="references">
+  References
+  <a class="anchor" href="#references">#</a>
+</h3>
+<ul>
+<li><a href="https://github.com/prometheus/alertmanager">AlertManager github</a></li>
+<li><a href="https://prometheus.io/docs/alerting/clients/">SENDING ALERTS</a></li>
+<li><a href="https://prometheus.io/docs/alerting/configuration/">CONFIGURATION</a></li>
+<li><a href="https://prometheus.io/docs/alerting/notifications/">NOTIFICATION TEMPLATE REFERENCE</a></li>
+<li><a href="https://kjanshair.github.io/2018/07/26/prometheus-alert-manager/">Understanding Prometheus AlertManager</a></li>
+<li><a href="https://ylzheng.com/2018/03/12/prometheus-alertmanager-ha/">Prometheus高可用(4)：Alertmanager高可用</a></li>
+<li><a href="https://blog.csdn.net/u014029783/article/details/80654727">Prometheus AlertManager代码阅读笔记</a></li>
+<li><a href="https://blog.csdn.net/u014029783/article/details/80663092">Prometheus AlertManager代码阅读笔记 Notify组件</a></li>
+<li><a href="https://gitlab.com/yakshaving.art/alertsnitch">Alertsnitch</a></li>
+<li><a href="https://github.com/prometheus/docs/blob/master/content/docs/operating/integrations.md">Prometheus integrations</a></li>
+<li><a href="https://www.slideshare.net/leecalcote/understanding-and-extending-prometheus-alertmanager">Understanding and extending prometheus alertmanager</a></li>
+<li><a href="https://books.google.com.pe/books?id=vTmbDwAAQBAJ&amp;pg=PA295&amp;lpg=PA295&amp;dq=alertmanager&#43;notify&#43;provider&amp;source=bl&amp;ots=m45ik8xem9&amp;sig=ACfU3U0hHJ9VxdDip60jq0dTQ0Ka2HjI3g&amp;hl=zh-CN&amp;sa=X&amp;ved=2ahUKEwi6tK_l6a_kAhWPtlkKHTwqB-kQ6AEwCXoECAkQAQ#v=onepage&amp;q=alertmanager%20notify%20provider&amp;f=false">Hands-On Infrastructure Monitoring with Prometheus</a></li>
+<li><a href="https://aleiwu.com/post/alertmanager/">搞搞 Prometheus: Alertmanager</a></li>
+</ul>
+</article>
+ 
+      
+
+      <footer class="book-footer">
+        
+  <div class="flex flex-wrap justify-between">
+
+
+
+
+
+</div>
+
+
+
+  <script>(function(){function a(c){const a=window.getSelection(),b=document.createRange();b.selectNodeContents(c),a.removeAllRanges(),a.addRange(b)}document.querySelectorAll("pre code").forEach(b=>{b.addEventListener("click",function(c){a(b.parentElement),navigator.clipboard&&navigator.clipboard.writeText(b.parentElement.textContent)})})})()</script>
+
+
+ 
+        
+      </footer>
+
+      
+  
+  <div class="book-comments">
+
+</div>
+  
+ 
+
+      <label for="menu-control" class="hidden book-menu-overlay"></label>
+    </div>
+
+    
+    <aside class="book-toc">
+      <div class="book-toc-content">
+        
+  
+<nav id="TableOfContents">
+  <ul>
+    <li><a href="#alertmanager">AlertManager</a>
+      <ul>
+        <li><a href="#architecture">Architecture</a></li>
+        <li><a href="#alert-provider">Alert Provider</a></li>
+        <li><a href="#silence-provider">Silence Provider</a></li>
+        <li><a href="#dispatcher">Dispatcher</a></li>
+        <li><a href="#inhibitor">Inhibitor</a></li>
+        <li><a href="#silencer">Silencer</a></li>
+        <li><a href="#notify-provider">Notify Provider</a></li>
+        <li><a href="#router">Router</a></li>
+        <li><a href="#receiver-stage">Receiver Stage</a></li>
+        <li><a href="#examples">Examples</a></li>
+        <li><a href="#references">References</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+
+
+ 
+      </div>
+    </aside>
+    
+  </main>
+
+  
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="">
+<meta name="theme-color" content="#FFFFFF">
+<meta name="color-scheme" content="light dark"><meta property="og:title" content="Blog" />
+<meta property="og:description" content="" />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="http://example.org/posts/" />
+
+<title>Blog | 酱油王</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/favicon.png" type="image/x-icon">
+<link rel="stylesheet" href="/book.min.46181bc93375ba932026e753b37c40e6ff8bb16a9ef770c78bcc663e4577b1ba.css" integrity="sha256-RhgbyTN1upMgJudTs3xA5v&#43;LsWqe93DHi8xmPkV3sbo=" crossorigin="anonymous">
+  <script defer src="/flexsearch.min.js"></script>
+  <script defer src="/en.search.min.e3d1bbac78330f1cc70982a957603bba2ca132f3b1f8b160e8efe21defc8e54b.js" integrity="sha256-49G7rHgzDxzHCYKpV2A7uiyhMvOx&#43;LFg6O/iHe/I5Us=" crossorigin="anonymous"></script>
+<link rel="alternate" type="application/rss+xml" href="http://example.org/posts/index.xml" title="酱油王" />
+<!--
+Made with Book Theme
+https://github.com/alex-shpak/hugo-book
+-->
+  
+</head>
+<body dir="ltr">
+  <input type="checkbox" class="hidden toggle" id="menu-control" />
+  <input type="checkbox" class="hidden toggle" id="toc-control" />
+  <main class="container flex">
+    <aside class="book-menu">
+      <div class="book-menu-content">
+        
+  <nav>
+<h2 class="book-brand">
+  <a class="flex align-center" href="/"><span>酱油王</span>
+  </a>
+</h2>
+
+
+<div class="book-search">
+  <input type="text" id="book-search-input" placeholder="Search" aria-label="Search" maxlength="64" data-hotkeys="s/" />
+  <div class="book-search-spinner hidden"></div>
+  <ul id="book-search-results"></ul>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+  
+<ul>
+  
+  <li>
+    <a href="/posts/" >
+        Blog
+      </a>
+  </li>
+  
+</ul>
+
+
+
+
+
+
+</nav>
+
+
+
+
+  <script>(function(){var a=document.querySelector("aside .book-menu-content");addEventListener("beforeunload",function(b){localStorage.setItem("menu.scrollTop",a.scrollTop)}),a.scrollTop=localStorage.getItem("menu.scrollTop")})()</script>
+
+
+ 
+      </div>
+    </aside>
+
+    <div class="book-page">
+      <header class="book-header">
+        
+  <div class="flex align-center justify-between">
+  <label for="menu-control">
+    <img src="/svg/menu.svg" class="book-icon" alt="Menu" />
+  </label>
+
+  <strong>Blog</strong>
+
+  <label for="toc-control">
+    
+    <img src="/svg/toc.svg" class="book-icon" alt="Table of Contents" />
+    
+  </label>
+</div>
+
+
+  
+  <aside class="hidden clearfix">
+    
+  <nav>
+  <ul>
+  
+    
+    <li class="book-section-flat">
+      <strong>Categories</strong>
+      <ul>
+      
+        <li class="flex justify-between">
+          <a href="/categories/golang/">golang</a>
+          <span>1</span>
+        </li>
+      
+        <li class="flex justify-between">
+          <a href="/categories/prometheus/">Prometheus</a>
+          <span>1</span>
+        </li>
+      
+        <li class="flex justify-between">
+          <a href="/categories/raft/">raft</a>
+          <span>1</span>
+        </li>
+      
+      </ul>
+    </li>
+    
+  
+    
+    <li class="book-section-flat">
+      <strong>Tags</strong>
+      <ul>
+      
+        <li class="flex justify-between">
+          <a href="/tags/golang/">golang</a>
+          <span>1</span>
+        </li>
+      
+        <li class="flex justify-between">
+          <a href="/tags/prometheus/">prometheus</a>
+          <span>1</span>
+        </li>
+      
+        <li class="flex justify-between">
+          <a href="/tags/raft/">raft</a>
+          <span>1</span>
+        </li>
+      
+      </ul>
+    </li>
+    
+  
+  </ul>
+</nav>
+
+
+  </aside>
+  
+ 
+      </header>
+
+      
+      
+  
+  <article class="markdown book-post">
+    <h2>
+      <a href="/posts/etcd_raft/">etcd raft</a>
+    </h2>
+    
+  <h5>December 23, 2021</h5>
+
+
+
+  
+  <div>
+    
+      <a href="/categories/raft/">raft</a>
+  </div>
+  
+
+  
+  <div>
+    
+      <a href="/tags/raft/">raft</a>
+  </div>
+  
+
+
+
+
+    <p>etcd 代码分析可以参考：etcd 注解版 ，也欢迎大家交流讨论
+Raft message type #  Raft集群中节点之间的通信都是通过传递不同的Message来完成的，Message类型 有很多种，下面介绍部分：
+ MsgHup   用于选举，对于follower或者candidate，其tick函数对应tickElection。如果follower或者candidate在选举超时时间都没有收到心跳信息，它将发送MsgHup到Step方法，其角色将变为candidate（对于follower节点）并发起新一轮选举。
+  MsgBeat   MsgApp是一个内部使用的类型，对于leader节点，其tick函数对应tickHeartbeat，周期性地向follower节点发送MsgHeartbeat消息。
+  MsgProp   MsgProp提议附加数据到log entries，而且它会重定向propose到leader节点。因此，send方法用hardState覆写了Message的term号。-
+ 当MsgProp传递到leader的step方法，leader首先会调用appendEntry方法将entries附加到它的log，接着会调用bcastAppend方法发送entries到peers。 当MsgProp传递到candidate，则直接丢弃。 当传递到follower，MsgProp存储到follower的mailbox，即msgs，它保存了发送者的ID，随后通过rafthttp包转发到leader。    MsgApp   复制log entries。leader调用bcastAppend方法，其会调用bcastAppend方法发送即将要复制的MsgApp类型的logs。当MsgApp被传递到candidate的Step方法，candidate将会revert back to follower，表示存在有效的leader在发送MsgApp消息。candidate和follower会回复MsgAppResp消息。
+  MsgAppResp   用于响应log复制请求。当MsgApp发送到candidate和follower的Step方法，它们会调用handleAppendEntries方法，其会发送MsgAppResp到raft mailbox。
+  MsgVote   请求投票选举。当MsgHup传递到follower或candidate的Step方法，将会调用campaign方法去竞选自己成为leader， 一旦campaign方法被调用，节点将会变成candidate，然后发送MsgVote到peers去请求投票。
+ 当消息传递到leader或candidate的Step方法，如果消息的term小于leader或candidate的term，则消息会被拒绝掉（MsgVoteResp将设置Reject为true），如果leader或candidate接收到term更大的MsgVote，他们将会revert back to follower。 当&rsquo;MsgVote&rsquo;被传递给follower时，只有当sender的last term大于MsgVote的term或sender的last term等于MsgVote的term但sender的最后提交索引大于或等于follower的时，它才会投票给sender。    MsgVoteResp   投票选举相应消息。当candidate收到MsgVoteResp，它会统计自己的票数，如果票数超过quorum，它将会变成leader，然后调用bcastAppend，如果candidate收到大多数的拒绝投票，则revert back to follower。
+        <a href="/posts/etcd_raft/">...</a>
+      
+    </p>
+  </article>
+  
+  <article class="markdown book-post">
+    <h2>
+      <a href="/posts/prometheus-wal/">Prometheus WAL源码阅读</a>
+    </h2>
+    
+  <h5>December 23, 2021</h5>
+
+
+
+  
+  <div>
+    
+      <a href="/categories/prometheus/">Prometheus</a>, 
+      <a href="/categories/golang/">golang</a>
+  </div>
+  
+
+  
+  <div>
+    
+      <a href="/tags/prometheus/">prometheus</a>, 
+      <a href="/tags/golang/">golang</a>
+  </div>
+  
+
+
+
+
+    <p>概述 #  WAL(Write-ahead logging, 预写日志)是关系型数据库中利用日志来实现事务性和持久性的一种技术，即在某个操作之前先将这个事情记录下来，以便之后对数据进行回滚，重试等操作保证数据的可靠性。
+Prometheus为了防止丢失暂存在内存中的还未被写入磁盘的监控数据，引入了WAL机制。WAL被分割成默认大小为128M的文件段（segment），之前版本默认大小是256M，文件段以数字命名，长度为8位的整形。WAL的写入单位是页（page），每页的大小为32KB，所以每个段大小必须是页的大小的整数倍。每个文件段都有一个“==已使用的页？==”属性来标识在该段中已经分配的页数目，如果WAL一次性写入的页数超过一个段的空闲页数，就会创建一个新的文件段来保存这些页，从而确保一次性写入的页不会跨段存储。
+const ( DefaultSegmentSize = 128 * 1024 * 1024 // 128 MB  pageSize = 32 * 1024 // 32KB  recordHeaderSize = 7 ) 本文是在prometheus tsdb部分源码阅读之wal.LogSeries基础上进行扩展，由于tsdb/wal.go文件中定义的WAL接口以及相关方法已经deprecated，如下所示。因此本文针对tsdb/wal/wal.go文件进行分析。
+// WAL is a write ahead log that can log new series labels and samples. // It must be completely read before new entries are logged. // // DEPRECATED: use wal pkg combined with the record codex instead.
+        <a href="/posts/prometheus-wal/">...</a>
+      
+    </p>
+  </article>
+  
+  <article class="markdown book-post">
+    <h2>
+      <a href="/posts/alertmanager/">Alert Manager</a>
+    </h2>
+    
+
+
+  
+
+  
+
+
+
+
+    <p>AlertManager #   Architecture #     Alertmanager作为一个独立的组件，负责接收并处理来自Prometheus Server(也可以是其它的客户端程序)的告警信息。Alertmanager可以对这些告警信息进行进一步的处理，比如当接收到大量重复告警时能够消除重复的告警信息，同时对告警信息进行分组并且路由到正确的通知方，Prometheus内置了对邮件，Slack等多种通知方式的支持，同时还支持与Webhook的集成，以支持更多定制化的场景。同时AlertManager还提供了静默和告警抑制机制来对告警通知行为进行优化。
+ 客户端通过POST请求向AlertManager推送告警信息。 每条告警信息中的labels可用于唯一识别告警信息并用于去重。    AlertManager主要分为两个部分，路由(router)和接收器(receiver)。告警消息先被经过路由树，然后被分配到对应的接收器中。路由树是由预先设定的路由规则生成的。其高可用架构如上图所示，具体流程如下：
+ Prometheus会通过调用AlertManager提供的告警接口将原始的告警消息发送到AlertManager。 AlertManager的API除了接收告警，还接收静默请求，将其分别保存到各自的provider里。 provider提供了一个订阅（subscribe）接口，这样Dispatcher组件便可以获取告警数据，并对数据进行分组，通过用户预先设置的规则进入告警抑制阶段或静默阶段。 如果通过了上面的告警静默阶段，则进入路由分发阶段，最终发送通知。    上报数据格式 #  [ { &quot;labels&quot;: { &quot;alertname&quot;: &quot;&lt;requiredAlertName&gt;&quot;, &quot;&lt;labelname&gt;&quot;: &quot;&lt;labelvalue&gt;&quot;, ... }, &quot;annotations&quot;: { &quot;&lt;labelname&gt;&quot;: &quot;&lt;labelvalue&gt;&quot;, }, &quot;startsAt&quot;: &quot;&lt;rfc3339&gt;&quot;, &quot;endsAt&quot;: &quot;&lt;rfc3339&gt;&quot;, &quot;generatorURL&quot;: &quot;&lt;generator_url&gt;&quot; }, ... ]  其中：  告警信息的Fingerprint是通过labels来进行计算的。 startAt和endsAt在provider的告警合并会用到。     Alert Provider #   Prometheus或者告警发送系统可以通过API的方式发送给Alertmanager，收到告警后将告警分别存储在Alert Provider中（当前实现是存储在内存中，可以通过接口的方式自行实现其他存储方式比如MySQL或者ES）。 已解决的alerts会定期地从provider中清除，用户可以定义相应的回调函数，在alerts被删除时进行相应的回调处理。 Alert Provider收到告警信息后对相同的指标数据进行合并处理。  // Alerts gives access to a set of alerts.
+        <a href="/posts/alertmanager/">...</a>
+      
+    </p>
+  </article>
+  
+  <article class="markdown book-post">
+    <h2>
+      <a href="/posts/open-falcon/">Open Falcon</a>
+    </h2>
+    
+
+
+  
+
+  
+
+
+
+
+    <p>Open Faclon #   Architecture #   Faclon-agent #  Falcon-agent用于数据的采集，它会定期地将metric数据通过jsonRPC上报到Transfer，其上报的metric数据格式为：
+Data model #  open-falcon采用和opentsdb相同的数据格式：metric、endpoint加多组key value tags。例如：
+{ metric: load.1min, endpoint: open-falcon-host, tags: srv=falcon,idc=aws-sgp,group=az1, value: 1.5, timestamp: `date +%s`, counterType: GAUGE, step: 60 }  Transfer #   Transfer接收到agent上报的metric数据后，经过一定的处理（将tags字符串转化为map），然后上报到Graph, Judge和TSDB。  提供数据接收接口供Agent和自定义脚本push监控数据。 对接收到的数据做合法性校验，规整。 针对每个后端实例维护一个RPC连接池。 准备内存Queue中转监控数据。 根据一致性哈希将Queue中的数据转发给Judge和Graph。 当后端宕机的时候做少量数据缓存，提供重试机制。     Heartbeat Server #   HBS主要有如下功能：  agent发送心跳信息给HBS的时候，会把hostname、ip、agent version、plugin version等信息告诉HBS，HBS负责更新host表。 将IP白名单分发到所有的agent。 告诉各个agent应该执行哪些插件。 告诉各个agent应该监听哪些端口，进程。 缓存监控策略。  HBS去获取所有的报警策略缓存在内存里，然后Judge去向HBS请求。其中Judge通过rpc调用来获取。  在配置报警策略的时候配置了报警级别，比如P0/P1/P2等等，每个级别的报警都会对应不同的redis队列。         Judge #   因为监控系统数据量比较大，一台机器显然是搞不定的，所以必须要有个数据分片方案。Transfer通过一致性哈希来分片，每个Judge就只需要处理一小部分数据就可以了。 同时Judge会定期地通过RPC从Heartbeat Server同步Strategy和Expression用于告警的判定。 Judge接收到Transfer的metric数据后首先是否有针对其的Strategy和Expression，如果没有则直接跳过，如果有则进行告警判定。 Judge会将判定结果以Event的形式发送到Redis缓存中。   Alarm #   Alarm从redis缓存中获取Judge推送的Event后，根据Event的优先级分别进行处理。 Alarm从redis队列分别获取高优先级的Event和低优先级的Event，其分别位于highQueues和lowQueues，其中highQueues中配置的几个event队列中的事件是不会做告警合并的，lowQueues会做告警合并。  按照优先级轮询Redis读取告警事件。 对需要回调的告警事件回调业务系统接口。 对高优先级告警事件直接生成告警邮件和短信。 对低优先级告警事件做合并。 提供web页面展示当前未恢复的告警。   制定邮件，短信发送的接口规范。   Nodata #   nodata用于检测监控数据的上报异常。nodata和实时报警judge模块协同工作，过程为: 配置了nodata的采集项超时未上报数据，nodata生成一条默认的模拟数据；用户配置相应的报警策略，收到mock数据就产生报警。采集项上报异常检测，作为judge模块的一个必要补充，能够使judge的实时报警功能更加可靠、完善。    Graph #   References #   Open-falcon falcon-plus Falcon+ API Nodata 文档 心跳服务器 Falcon-HBS 源码解读视频 open-falcon 2.
+        <a href="/posts/open-falcon/">...</a>
+      
+    </p>
+  </article>
+  
+
+  
+ 
+      
+
+      <footer class="book-footer">
+        
+  <div class="flex flex-wrap justify-between">
+
+
+
+
+
+</div>
+
+
+
+  <script>(function(){function a(c){const a=window.getSelection(),b=document.createRange();b.selectNodeContents(c),a.removeAllRanges(),a.addRange(b)}document.querySelectorAll("pre code").forEach(b=>{b.addEventListener("click",function(c){a(b.parentElement),navigator.clipboard&&navigator.clipboard.writeText(b.parentElement.textContent)})})})()</script>
+
+
+ 
+        
+      </footer>
+
+      
+  
+ 
+
+      <label for="menu-control" class="hidden book-menu-overlay"></label>
+    </div>
+
+    
+    <aside class="book-toc">
+      <div class="book-toc-content">
+        
+  <nav>
+  <ul>
+  
+    
+    <li class="book-section-flat">
+      <strong>Categories</strong>
+      <ul>
+      
+        <li class="flex justify-between">
+          <a href="/categories/golang/">golang</a>
+          <span>1</span>
+        </li>
+      
+        <li class="flex justify-between">
+          <a href="/categories/prometheus/">Prometheus</a>
+          <span>1</span>
+        </li>
+      
+        <li class="flex justify-between">
+          <a href="/categories/raft/">raft</a>
+          <span>1</span>
+        </li>
+      
+      </ul>
+    </li>
+    
+  
+    
+    <li class="book-section-flat">
+      <strong>Tags</strong>
+      <ul>
+      
+        <li class="flex justify-between">
+          <a href="/tags/golang/">golang</a>
+          <span>1</span>
+        </li>
+      
+        <li class="flex justify-between">
+          <a href="/tags/prometheus/">prometheus</a>
+          <span>1</span>
+        </li>
+      
+        <li class="flex justify-between">
+          <a href="/tags/raft/">raft</a>
+          <span>1</span>
+        </li>
+      
+      </ul>
+    </li>
+    
+  
+  </ul>
+</nav>
+
+ 
+      </div>
+    </aside>
+    
+  </main>
+
+  
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+

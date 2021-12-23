@@ -1,0 +1,6 @@
+baseURL = 'http://example.org/'
+languageCode = 'en-us'
+title = '酱油王'
+theme = 'hugo-book'
+publishDir = 'docs'
+

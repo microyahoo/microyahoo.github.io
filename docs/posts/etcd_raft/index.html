@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="etcd 代码分析可以参考：etcd 注解版 ，也欢迎大家交流讨论
+Raft message type #  Raft集群中节点之间的通信都是通过传递不同的Message来完成的，Message类型 有很多种，下面介绍部分：
+ MsgHup   用于选举，对于follower或者candidate，其tick函数对应tickElection。如果follower或者candidate在选举超时时间都没有收到心跳信息，它将发送MsgHup到Step方法，其角色将变为candidate（对于follower节点）并发起新一轮选举。
+  MsgBeat   MsgApp是一个内部使用的类型，对于leader节点，其tick函数对应tickHeartbeat，周期性地向follower节点发送MsgHeartbeat消息。
+  MsgProp   MsgProp提议附加数据到log entries，而且它会重定向propose到leader节点。因此，send方法用hardState覆写了Message的term号。-
+ 当MsgProp传递到leader的step方法，leader首先会调用appendEntry方法将entries附加到它的log，接着会调用bcastAppend方法发送entries到peers。 当MsgProp传递到candidate，则直接丢弃。 当传递到follower，MsgProp存储到follower的mailbox，即msgs，它保存了发送者的ID，随后通过rafthttp包转发到leader。    MsgApp   复制log entries。leader调用bcastAppend方法，其会调用bcastAppend方法发送即将要复制的MsgApp类型的logs。当MsgApp被传递到candidate的Step方法，candidate将会revert back to follower，表示存在有效的leader在发送MsgApp消息。candidate和follower会回复MsgAppResp消息。
+  MsgAppResp   用于响应log复制请求。当MsgApp发送到candidate和follower的Step方法，它们会调用handleAppendEntries方法，其会发送MsgAppResp到raft mailbox。
+  MsgVote   请求投票选举。当MsgHup传递到follower或candidate的Step方法，将会调用campaign方法去竞选自己成为leader， 一旦campaign方法被调用，节点将会变成candidate，然后发送MsgVote到peers去请求投票。
+ 当消息传递到leader或candidate的Step方法，如果消息的term小于leader或candidate的term，则消息会被拒绝掉（MsgVoteResp将设置Reject为true），如果leader或candidate接收到term更大的MsgVote，他们将会revert back to follower。 当&rsquo;MsgVote&rsquo;被传递给follower时，只有当sender的last term大于MsgVote的term或sender的last term等于MsgVote的term但sender的最后提交索引大于或等于follower的时，它才会投票给sender。    MsgVoteResp   投票选举相应消息。当candidate收到MsgVoteResp，它会统计自己的票数，如果票数超过quorum，它将会变成leader，然后调用bcastAppend，如果candidate收到大多数的拒绝投票，则revert back to follower。">
+<meta name="theme-color" content="#FFFFFF">
+<meta name="color-scheme" content="light dark"><meta property="og:title" content="etcd raft" />
+<meta property="og:description" content="etcd 代码分析可以参考：etcd 注解版 ，也欢迎大家交流讨论
+Raft message type #  Raft集群中节点之间的通信都是通过传递不同的Message来完成的，Message类型 有很多种，下面介绍部分：
+ MsgHup   用于选举，对于follower或者candidate，其tick函数对应tickElection。如果follower或者candidate在选举超时时间都没有收到心跳信息，它将发送MsgHup到Step方法，其角色将变为candidate（对于follower节点）并发起新一轮选举。
+  MsgBeat   MsgApp是一个内部使用的类型，对于leader节点，其tick函数对应tickHeartbeat，周期性地向follower节点发送MsgHeartbeat消息。
+  MsgProp   MsgProp提议附加数据到log entries，而且它会重定向propose到leader节点。因此，send方法用hardState覆写了Message的term号。-
+ 当MsgProp传递到leader的step方法，leader首先会调用appendEntry方法将entries附加到它的log，接着会调用bcastAppend方法发送entries到peers。 当MsgProp传递到candidate，则直接丢弃。 当传递到follower，MsgProp存储到follower的mailbox，即msgs，它保存了发送者的ID，随后通过rafthttp包转发到leader。    MsgApp   复制log entries。leader调用bcastAppend方法，其会调用bcastAppend方法发送即将要复制的MsgApp类型的logs。当MsgApp被传递到candidate的Step方法，candidate将会revert back to follower，表示存在有效的leader在发送MsgApp消息。candidate和follower会回复MsgAppResp消息。
+  MsgAppResp   用于响应log复制请求。当MsgApp发送到candidate和follower的Step方法，它们会调用handleAppendEntries方法，其会发送MsgAppResp到raft mailbox。
+  MsgVote   请求投票选举。当MsgHup传递到follower或candidate的Step方法，将会调用campaign方法去竞选自己成为leader， 一旦campaign方法被调用，节点将会变成candidate，然后发送MsgVote到peers去请求投票。
+ 当消息传递到leader或candidate的Step方法，如果消息的term小于leader或candidate的term，则消息会被拒绝掉（MsgVoteResp将设置Reject为true），如果leader或candidate接收到term更大的MsgVote，他们将会revert back to follower。 当&rsquo;MsgVote&rsquo;被传递给follower时，只有当sender的last term大于MsgVote的term或sender的last term等于MsgVote的term但sender的最后提交索引大于或等于follower的时，它才会投票给sender。    MsgVoteResp   投票选举相应消息。当candidate收到MsgVoteResp，它会统计自己的票数，如果票数超过quorum，它将会变成leader，然后调用bcastAppend，如果candidate收到大多数的拒绝投票，则revert back to follower。" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="http://example.org/posts/etcd_raft/" /><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2021-12-23T00:00:00+00:00" />
+<meta property="article:modified_time" content="2021-12-23T00:00:00+00:00" />
+
+<title>etcd raft | 酱油王</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/favicon.png" type="image/x-icon">
+<link rel="stylesheet" href="/book.min.46181bc93375ba932026e753b37c40e6ff8bb16a9ef770c78bcc663e4577b1ba.css" integrity="sha256-RhgbyTN1upMgJudTs3xA5v&#43;LsWqe93DHi8xmPkV3sbo=" crossorigin="anonymous">
+  <script defer src="/flexsearch.min.js"></script>
+  <script defer src="/en.search.min.e3d1bbac78330f1cc70982a957603bba2ca132f3b1f8b160e8efe21defc8e54b.js" integrity="sha256-49G7rHgzDxzHCYKpV2A7uiyhMvOx&#43;LFg6O/iHe/I5Us=" crossorigin="anonymous"></script>
+<!--
+Made with Book Theme
+https://github.com/alex-shpak/hugo-book
+-->
+  
+</head>
+<body dir="ltr">
+  <input type="checkbox" class="hidden toggle" id="menu-control" />
+  <input type="checkbox" class="hidden toggle" id="toc-control" />
+  <main class="container flex">
+    <aside class="book-menu">
+      <div class="book-menu-content">
+        
+  <nav>
+<h2 class="book-brand">
+  <a class="flex align-center" href="/"><span>酱油王</span>
+  </a>
+</h2>
+
+
+<div class="book-search">
+  <input type="text" id="book-search-input" placeholder="Search" aria-label="Search" maxlength="64" data-hotkeys="s/" />
+  <div class="book-search-spinner hidden"></div>
+  <ul id="book-search-results"></ul>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+  
+<ul>
+  
+  <li>
+    <a href="/posts/" >
+        Blog
+      </a>
+  </li>
+  
+</ul>
+
+
+
+
+
+
+</nav>
+
+
+
+
+  <script>(function(){var a=document.querySelector("aside .book-menu-content");addEventListener("beforeunload",function(b){localStorage.setItem("menu.scrollTop",a.scrollTop)}),a.scrollTop=localStorage.getItem("menu.scrollTop")})()</script>
+
+
+ 
+      </div>
+    </aside>
+
+    <div class="book-page">
+      <header class="book-header">
+        
+  <div class="flex align-center justify-between">
+  <label for="menu-control">
+    <img src="/svg/menu.svg" class="book-icon" alt="Menu" />
+  </label>
+
+  <strong>etcd raft</strong>
+
+  <label for="toc-control">
+    
+    <img src="/svg/toc.svg" class="book-icon" alt="Table of Contents" />
+    
+  </label>
+</div>
+
+
+  
+  <aside class="hidden clearfix">
+    
+  
+<nav id="TableOfContents">
+  <ul>
+    <li><a href="#raft-message-type">Raft message type</a>
+      <ul>
+        <li><a href="#local-message">Local message</a></li>
+        <li><a href="#response-message">Response message</a></li>
+      </ul>
+    </li>
+    <li><a href="#q--a">Q &amp; A</a>
+      <ul>
+        <li><a href="#confstate">ConfState</a></li>
+        <li><a href="#snapshot-发送与接收">snapshot 发送与接收</a></li>
+      </ul>
+    </li>
+    <li><a href="#参考链接">参考链接</a></li>
+  </ul>
+</nav>
+
+
+
+  </aside>
+  
+ 
+      </header>
+
+      
+      
+<article class="markdown">
+  <h1>
+    <a href="/posts/etcd_raft/">etcd raft</a>
+  </h1>
+  
+  <h5>December 23, 2021</h5>
+
+
+
+  
+  <div>
+    
+      <a href="/categories/raft/">raft</a>
+  </div>
+  
+
+  
+  <div>
+    
+      <a href="/tags/raft/">raft</a>
+  </div>
+  
+
+
+
+<hr>
+<p>etcd 代码分析可以参考：<a href="https://github.com/microyahoo/etcd">etcd 注解版</a> ，也欢迎大家交流讨论</p>
+<h2 id="raft-message-type">
+  Raft message type
+  <a class="anchor" href="#raft-message-type">#</a>
+</h2>
+<p>Raft集群中节点之间的通信都是通过传递不同的Message来完成的，<a href="https://github.com/etcd-io/etcd/blob/7572a61a39d4eaad596ab8d9364f7df9a84ff4a3/raft/raftpb/raft.pb.go#L75-L95">Message类型</a> 有很多种，下面介绍部分：</p>
+<ul>
+<li>MsgHup</li>
+</ul>
+<blockquote>
+<p>用于选举，对于<code>follower</code>或者<code>candidate</code>，其<code>tick</code>函数对应<code>tickElection</code>。如果<code>follower</code>或者<code>candidate</code>在选举超时时间都没有收到心跳信息，它将发送MsgHup到Step方法，其角色将变为candidate（对于follower节点）并发起新一轮选举。</p>
+</blockquote>
+<ul>
+<li>MsgBeat</li>
+</ul>
+<blockquote>
+<p>MsgApp是一个内部使用的类型，对于leader节点，其<code>tick</code>函数对应<code>tickHeartbeat</code>，周期性地向follower节点发送<code>MsgHeartbeat</code>消息。</p>
+</blockquote>
+<ul>
+<li>MsgProp</li>
+</ul>
+<blockquote>
+<p>MsgProp提议附加数据到log entries，而且它会重定向propose到leader节点。因此，<code>send</code>方法用hardState覆写了Message的term号。-</p>
+<ul>
+<li>当MsgProp传递到leader的<code>step</code>方法，leader首先会调用<code>appendEntry</code>方法将entries附加到它的log，接着会调用<code>bcastAppend</code>方法发送entries到peers。</li>
+<li>当MsgProp传递到candidate，则直接丢弃。</li>
+<li>当传递到follower，MsgProp存储到follower的mailbox，即msgs，它保存了发送者的ID，随后通过<code>rafthttp</code>包转发到leader。</li>
+</ul>
+</blockquote>
+<ul>
+<li>MsgApp</li>
+</ul>
+<blockquote>
+<p>复制log entries。leader调用<code>bcastAppend</code>方法，其会调用<code>bcastAppend</code>方法发送即将要复制的MsgApp类型的logs。当MsgApp被传递到candidate的<code>Step</code>方法，candidate将会revert back to follower，表示存在有效的leader在发送MsgApp消息。candidate和follower会回复<code>MsgAppResp</code>消息。</p>
+</blockquote>
+<ul>
+<li>MsgAppResp</li>
+</ul>
+<blockquote>
+<p>用于响应log复制请求。当MsgApp发送到candidate和follower的<code>Step</code>方法，它们会调用<code>handleAppendEntries</code>方法，其会发送MsgAppResp到raft mailbox。</p>
+</blockquote>
+<ul>
+<li>MsgVote</li>
+</ul>
+<blockquote>
+<p>请求投票选举。当MsgHup传递到follower或candidate的<code>Step</code>方法，将会调用<code>campaign</code>方法去竞选自己成为leader， 一旦<code>campaign</code>方法被调用，节点将会变成candidate，然后发送MsgVote到peers去请求投票。</p>
+<ul>
+<li>当消息传递到leader或candidate的<code>Step</code>方法，如果消息的term小于leader或candidate的term，则消息会被拒绝掉（MsgVoteResp将设置<code>Reject</code>为true），如果leader或candidate接收到term更大的MsgVote，他们将会revert back to follower。</li>
+<li>当&rsquo;MsgVote&rsquo;被传递给follower时，只有当sender的last term大于MsgVote的term或sender的last term等于MsgVote的term但sender的最后提交索引大于或等于follower的时，它才会投票给sender。</li>
+</ul>
+</blockquote>
+<ul>
+<li>MsgVoteResp</li>
+</ul>
+<blockquote>
+<p>投票选举相应消息。当candidate收到MsgVoteResp，它会统计自己的票数，如果票数超过quorum，它将会变成leader，然后调用<code>bcastAppend</code>，如果candidate收到大多数的拒绝投票，则revert back to follower。</p>
+</blockquote>
+<ul>
+<li>MsgPreVote和MsgPreVoteResp</li>
+</ul>
+<blockquote>
+<p>两阶段选举协议，是一个可选配置项。当<code>Config.PreVote</code>设置为true时，预选举过程与常规选举过程类似，只是不会增加term，除非它在第一个阶段竞选赢得了大多数票。加入这个选项可以将节点分区导致的影响降至最低。</p>
+</blockquote>
+<ul>
+<li>MsgSnap</li>
+</ul>
+<blockquote>
+<p>请求应用快照消息。当一个节点刚变为leader，或者leader接收到MsgProp消息，然后调用<code>bcastAppend</code>方法，这个方法会调用<code>sendAppend</code>方法到每个follower节点。在<code>sendAppend</code>方法中，如果leader获取term或者entries失败，则leader将会发送MsgSnap类型消息来请求快照。</p>
+</blockquote>
+<ul>
+<li>MsgSnapStatus</li>
+</ul>
+<blockquote>
+<p>告知快照消息应用的结果。当follower节点拒绝MsgSnap消息，表明因为网络问题导致网络层不能正常发送snapshot到follower，从而导致快照请求失败，leader将follower的<code>progress</code>设置为<code>probe</code>。当MsgSnap没有被拒绝，表明快照被正常接收，leader将follower的<code>progress</code>设置为<code>probe</code>，同时开始log复制。</p>
+</blockquote>
+<ul>
+<li>MsgHeartbeat</li>
+</ul>
+<blockquote>
+<p>leader发送心跳信息。</p>
+<ul>
+<li>当MsgHeartbeat消息发送到candidate，且消息的term大于candidate的term，则candidate将revert back to follower，同时会更新自己的提交索引号，然后发送消息到mailbox。</li>
+<li>当MsgHeartbeat消息发送到follower的<code>Step</code>方法，如果消息的term大于follower的term，则follower会更新<code>leaderID</code>。</li>
+</ul>
+</blockquote>
+<ul>
+<li>MsgHeartbeatResp</li>
+</ul>
+<blockquote>
+<p>心跳响应消息。MsgHeartbeatResp传递到leader的<code>Step</code>方法，leader会知道哪些节点做了回复响应。只有当leader最后提交索引号大于follower的<code>Match</code>索引号时leader调用<code>sendAppend</code>方法。</p>
+</blockquote>
+<ul>
+<li>MsgUnreachable</li>
+</ul>
+<blockquote>
+<p>告知消息或请求不能被deliver，当MsgUnreachable传递到leader的<code>Step</code>方法，leader发现发送MsgUnreachable消息的follower节点不可达，这通常意味着MsgApp丢失了。如果此时follower的progress状态为<code>replicate</code>，则leader会将其重新设置回<code>probe</code>状态。</p>
+</blockquote>
+<ul>
+<li>MsgCheckQuorum</li>
+</ul>
+<blockquote>
+<p>如果开启<code>CheckQuorum</code>，则选举超时后会发送<code>MsgCheckQuorum</code>消息，leader节点判断其是否满足quorum，如果不满足则step down to follower节点。</p>
+</blockquote>
+<ul>
+<li>MsgReadIndex</li>
+</ul>
+<blockquote>
+</blockquote>
+<ul>
+<li>MsgReadIndexResp</li>
+</ul>
+<blockquote>
+</blockquote>
+<ul>
+<li>MsgTransferLeader</li>
+</ul>
+<blockquote>
+<p>对于<code>MsgTransferLeader</code>消息，follower节点会将其转发到leader节点，leader节点在收到<code>MsgTransferLeader</code>消息后会首先记录lead被转移者，然后判断转移目标的日志是否跟上了。</p>
+<ul>
+<li>如果跟上了会向被转移者发送 <code>MsgTimeoutNow</code> 消息, 被转移者收到消息后会强制发起新一轮选举。</li>
+<li>如果没有跟上则先进行日志同步，等leader收到同步日志的<code>MsgAppResp</code>消息后会判断其是否已跟上，步骤同上。</li>
+</ul>
+</blockquote>
+<ul>
+<li>MsgTimeoutNow</li>
+</ul>
+<blockquote>
+</blockquote>
+<h3 id="local-message">
+  Local message
+  <a class="anchor" href="#local-message">#</a>
+</h3>
+<ul>
+<li>MsgHup</li>
+<li>MsgBeat</li>
+<li>MsgUnreachable</li>
+<li>MsgSnapStatus</li>
+<li>MsgCheckQuorum</li>
+</ul>
+<h3 id="response-message">
+  Response message
+  <a class="anchor" href="#response-message">#</a>
+</h3>
+<ul>
+<li>MsgAppResp</li>
+<li>MsgVoteResp</li>
+<li>MsgHeartbeatResp</li>
+<li>MsgUnreachable</li>
+<li>MsgPreVoteResp</li>
+</ul>
+<hr>
+<h2 id="q--a">
+  Q &amp; A
+  <a class="anchor" href="#q--a">#</a>
+</h2>
+<ol>
+<li>发送如下类型的消息时需要设置term，其他类型的消息都不需要设置term。</li>
+</ol>
+<ul>
+<li>pb.MsgVote</li>
+<li>pb.MsgVoteResp</li>
+<li>pb.MsgPreVote</li>
+<li>pb.MsgPreVoteResp</li>
+</ul>
+<p>但是对于消息类型既不是MsgProp，又不是MsgReadIndex类型的，会为其加上raft.Term，具体实现参考<code>raft/raft.go</code>中的 <code>send()</code>方法。</p>
+<ol start="2">
+<li>raft的<code>tracker.ProgressTracker</code>在什么地方赋值的？</li>
+</ol>
+<blockquote>
+<p>初始化集群时，如果没有<code>WAL</code>，同时为新集群，同时指定了<code>--initial-cluster</code>参数，会将其解析为ServerConfig的<code>InitialPeerURLsMap</code>参数，然后初始化RaftCluster，并添加members。接着<code>bootstrapRaftFromCluster</code>方法会根据cluster的member ids生成peers。
+Peer的信息如下：</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#66d9ef">type</span> <span style="color:#a6e22e">Peer</span> <span style="color:#66d9ef">struct</span> {
+    <span style="color:#a6e22e">ID</span>      <span style="color:#66d9ef">uint64</span>
+    <span style="color:#a6e22e">Context</span> []<span style="color:#66d9ef">byte</span>
+}
+
+<span style="color:#66d9ef">type</span> <span style="color:#a6e22e">Member</span> <span style="color:#66d9ef">struct</span> {
+    <span style="color:#a6e22e">ID</span> <span style="color:#a6e22e">types</span>.<span style="color:#a6e22e">ID</span> <span style="color:#e6db74">`json:&#34;id&#34;`</span>                                                                         
+    <span style="color:#a6e22e">RaftAttributes</span>
+    <span style="color:#a6e22e">Attributes</span>
+}
+</code></pre></div><blockquote>
+<p>peer中的<code>Context</code>为<code>Member</code>序列化后的信息，其中包括 ID, RaftAttributes, Attributes信息。接着<code>raft/node.go</code>会调用<code>StartNode</code>方法，里面的Bootstrap方法会根据peers生成相应的<code>pb.ConfChange</code> entries，然后调用<code>applyConfChange</code>方法，这里会更新<code>raft.prs</code>，返回最新的<code>tracker.Config</code>和<code>tracker.ProgressMap</code>信息。</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go">(<span style="color:#a6e22e">dlv</span>) <span style="color:#a6e22e">p</span> <span style="color:#a6e22e">cfg</span>.<span style="color:#a6e22e">Voters</span>
+<span style="color:#66d9ef">go</span>.<span style="color:#a6e22e">etcd</span>.<span style="color:#a6e22e">io</span><span style="color:#f92672">/</span><span style="color:#a6e22e">etcd</span><span style="color:#f92672">/</span><span style="color:#a6e22e">raft</span><span style="color:#f92672">/</span><span style="color:#a6e22e">v3</span><span style="color:#f92672">/</span><span style="color:#a6e22e">quorum</span>.<span style="color:#a6e22e">JointConfig</span> [
+	[
+		<span style="color:#ae81ff">9372538179322589801</span>: {}, 
+		<span style="color:#ae81ff">10501334649042878790</span>: {}, 
+		<span style="color:#ae81ff">18249187646912138824</span>: {}, 
+	],
+	<span style="color:#66d9ef">nil</span>,
+]
+(<span style="color:#a6e22e">dlv</span>) <span style="color:#a6e22e">p</span> <span style="color:#a6e22e">prs</span>
+<span style="color:#66d9ef">go</span>.<span style="color:#a6e22e">etcd</span>.<span style="color:#a6e22e">io</span><span style="color:#f92672">/</span><span style="color:#a6e22e">etcd</span><span style="color:#f92672">/</span><span style="color:#a6e22e">raft</span><span style="color:#f92672">/</span><span style="color:#a6e22e">v3</span><span style="color:#f92672">/</span><span style="color:#a6e22e">tracker</span>.<span style="color:#a6e22e">ProgressMap</span> [
+	<span style="color:#ae81ff">9372538179322589801</span>: <span style="color:#f92672">*</span>{
+		<span style="color:#a6e22e">Match</span>: <span style="color:#ae81ff">0</span>,
+		<span style="color:#a6e22e">Next</span>: <span style="color:#ae81ff">3</span>,
+		<span style="color:#a6e22e">State</span>: <span style="color:#a6e22e">StateProbe</span> (<span style="color:#ae81ff">0</span>),
+		<span style="color:#a6e22e">PendingSnapshot</span>: <span style="color:#ae81ff">0</span>,
+		<span style="color:#a6e22e">RecentActive</span>: <span style="color:#66d9ef">true</span>,
+		<span style="color:#a6e22e">ProbeSent</span>: <span style="color:#66d9ef">false</span>,
+		<span style="color:#a6e22e">Inflights</span>: <span style="color:#f92672">*</span>(<span style="color:#f92672">*</span><span style="color:#e6db74">&#34;go.etcd.io/etcd/raft/v3/tracker.Inflights&#34;</span>)(<span style="color:#ae81ff">0xc00012f470</span>),
+		<span style="color:#a6e22e">IsLearner</span>: <span style="color:#66d9ef">false</span>,}, 
+	<span style="color:#ae81ff">10501334649042878790</span>: <span style="color:#f92672">*</span>{
+		<span style="color:#a6e22e">Match</span>: <span style="color:#ae81ff">0</span>,
+		<span style="color:#a6e22e">Next</span>: <span style="color:#ae81ff">3</span>,
+		<span style="color:#a6e22e">State</span>: <span style="color:#a6e22e">StateProbe</span> (<span style="color:#ae81ff">0</span>),
+		<span style="color:#a6e22e">PendingSnapshot</span>: <span style="color:#ae81ff">0</span>,
+		<span style="color:#a6e22e">RecentActive</span>: <span style="color:#66d9ef">true</span>,
+		<span style="color:#a6e22e">ProbeSent</span>: <span style="color:#66d9ef">false</span>,
+		<span style="color:#a6e22e">Inflights</span>: <span style="color:#f92672">*</span>(<span style="color:#f92672">*</span><span style="color:#e6db74">&#34;go.etcd.io/etcd/raft/v3/tracker.Inflights&#34;</span>)(<span style="color:#ae81ff">0xc00012f620</span>),
+		<span style="color:#a6e22e">IsLearner</span>: <span style="color:#66d9ef">false</span>,}, 
+	<span style="color:#ae81ff">18249187646912138824</span>: <span style="color:#f92672">*</span>{
+		<span style="color:#a6e22e">Match</span>: <span style="color:#ae81ff">0</span>,
+		<span style="color:#a6e22e">Next</span>: <span style="color:#ae81ff">3</span>,
+		<span style="color:#a6e22e">State</span>: <span style="color:#a6e22e">StateProbe</span> (<span style="color:#ae81ff">0</span>),
+		<span style="color:#a6e22e">PendingSnapshot</span>: <span style="color:#ae81ff">0</span>,
+		<span style="color:#a6e22e">RecentActive</span>: <span style="color:#66d9ef">true</span>,
+		<span style="color:#a6e22e">ProbeSent</span>: <span style="color:#66d9ef">false</span>,
+		<span style="color:#a6e22e">Inflights</span>: <span style="color:#f92672">*</span>(<span style="color:#f92672">*</span><span style="color:#e6db74">&#34;go.etcd.io/etcd/raft/v3/tracker.Inflights&#34;</span>)(<span style="color:#ae81ff">0xc00012f560</span>),
+		<span style="color:#a6e22e">IsLearner</span>: <span style="color:#66d9ef">false</span>,}, 
+]
+</code></pre></div><ol start="3">
+<li><code>apply</code>的时候什么条件触发快照？ <code>unstable</code>中的快照是什么时候赋值的？什么条件触发？</li>
+</ol>
+<blockquote>
+<p>TODO</p>
+</blockquote>
+<ol start="4">
+<li>为什么<code>raft.msgs</code>读写时不需要加锁？</li>
+</ol>
+<blockquote>
+<p>其实etcd里很多地方都是采用的单线程模式，比如<code>apply</code>也是。</p>
+</blockquote>
+<ol start="5">
+<li>对于 <code>raftpb.Message</code>中的<code>MsgApp</code>类型，其<code>LogTerm</code>，<code>Index</code>, <code>Commit</code>, <code>Entries</code>的含义？</li>
+</ol>
+<blockquote>
+<p><code>LogTerm</code>通常用于append raft logs到follower节点。</p>
+<p>例如：对于消息<code>(type=MsgApp,index=100,logTerm=5)</code>，表示leader从index=101开始 append entries，而index=100对应的Term值为5。
+对于消息<code>(type=MsgAppResp,reject=true,index=100,logTerm=5)</code>，表示follower拒绝了leader的entries（可能是部分），由于follower节点已经包含index=100，term=5的entry。</p>
+<p><code>Commit</code> 为 <code>raftLog</code> 的<code>committed</code> index。</p>
+<p><code>Index</code>和<code>LogTerm</code>字段是用于日志匹配的日志（即发送的日志的上一条日志）的index与term（用于日志匹配的term字段为LogTerm，消息的Term字段为该节点当前的term，部分消息需要自己指定，部分消息由<code>send</code>方法填充）。<code>Entries</code>字段保存了需要复制的日志条目。<code>Commit</code>字段为leader提交的最后一条日志的索引。</p>
+</blockquote>
+<ol start="6">
+<li>如何提高读性能，同时避免网络分区后重新选举出新leader出现的<code>stale read</code>？</li>
+</ol>
+<blockquote>
+<p>TODO</p>
+</blockquote>
+<ol start="7">
+<li>
+<p><code>CheckQuorum</code>默认自动开启，同时开启<code>Check Quorum</code>会自动开启<code>Leader Lease</code></p>
+</li>
+<li>
+<p><code>raft.maybeSendAppend</code>在发送 Message 时，会对 Message 中的entries大小做限制，<code>maxSizePerMsg</code>为1MB，因此entries在超过此大小时会如何处理？ <code>raftLog.maybeAppend</code>如何更新commit？</p>
+</li>
+</ol>
+<blockquote>
+<p>如果要发送的entries超过大小限制，则会发送多次</p>
+</blockquote>
+<ol start="9">
+<li><code>pb.MsgSnapStatus</code>消息以及<code>ReportSnapshot</code>的作用？</li>
+</ol>
+<blockquote>
+<p>TODO</p>
+</blockquote>
+<ol start="10">
+<li><code>candidate</code>节点在赢得选举之后会append一条空的日志条目，其作用是什么？</li>
+</ol>
+<blockquote>
+<p>candidate在当选leader后会在当前term为自己的日志追加一条空日志条目，并广播，以提交之前term的日志，具体可参考<code>raft/raft.go</code>中的<code>handleAppendEntries()</code>。</p>
+</blockquote>
+<ol start="11">
+<li>日志复制不匹配时的回退优化算法</li>
+</ol>
+<blockquote>
+<p>TODO</p>
+</blockquote>
+<ol start="12">
+<li>
+<p>对于<code>follower</code>节点，无论是处理<code>MsgApp</code>消息还是处理<code>MsgSnap</code>消息，返回的消息都是<code>MsgAppResp</code>。</p>
+</li>
+<li>
+<p>在通过<code>Transport</code>发送<code>Messages</code>时，会忽略<code>Message.To == 0</code>的消息。</p>
+</li>
+<li>
+<p>由于etcd的模块化设计，raft模块和存储网络模块是分开的，因此<code>send</code>方法只是将消息放入<code>mailbox</code>，而不是立刻将其发出（etcd/raft也没有通信模块）, 其与外界的交互都是通过<code>Ready</code>来进行处理的。因此，当<code>follower</code>收到<code>MsgApp</code>请求时，执行的操作实际上是（不考虑特殊情况）：</p>
+</li>
+</ol>
+<blockquote>
+<ul>
+<li>将新日志追加到<code>unstable</code>中。</li>
+<li>将包含<code>unstable</code>的<code>last index</code>的<code>MsgAppResp</code>消息放入信箱，等待发送。</li>
+</ul>
+</blockquote>
+<p>对于<code>Ready</code>的处理，角色不同处理的次序也是有区别的：</p>
+<blockquote>
+<ul>
+<li>对于 <code>follower</code> 节点，是先将 <code>entries</code>， <code>hardState</code>， <code>snapshot</code> 保存到稳定的存储后再发送 <code>Messages</code>。</li>
+<li>对于 <code>leader</code> 节点，可以在发送 <code>Messages</code> 的同时将 <code>entries</code>， <code>hardState</code>， <code>snapshot</code>持久化。</li>
+</ul>
+</blockquote>
+<ol start="15">
+<li>raft中的异常处理，例如 添加成员时leader正在进行<code>leadTransfer</code>，如果收到MsgProp的消息，这时会返回 <code>ErrProposalDropped</code> 如何处理？</li>
+</ol>
+<blockquote>
+<p>TODO</p>
+</blockquote>
+<ol start="16">
+<li><code>applyEntryNormal</code>时有V2和V3请求，分别对应<code>pb.Request</code>和<code>pb.InternalRaftRequest</code>，其log对应：</li>
+</ol>
+<pre tabindex="0"><code>167 {&quot;level&quot;:&quot;debug&quot;,&quot;ts&quot;:&quot;2021-12-08T10:49:48.188+0800&quot;,&quot;caller&quot;:&quot;etcdserver/server.go:1835&quot;,&quot;msg&quot;:&quot;Applying entry&quot;,&quot;index&quot;:8,&quot;term&quot;:2,&quot;type&quot;:&quot;EntryNormal&quot;}
+168 {&quot;level&quot;:&quot;debug&quot;,&quot;ts&quot;:&quot;2021-12-08T10:49:48.189+0800&quot;,&quot;caller&quot;:&quot;etcdserver/server.go:1885&quot;,&quot;msg&quot;:&quot;apply entry normal&quot;,&quot;consistent-index&quot;:7,&quot;entry-index&quot;:8,&quot;should-applyV3&quot;:true}
+169 {&quot;level&quot;:&quot;debug&quot;,&quot;ts&quot;:&quot;2021-12-08T10:49:48.189+0800&quot;,&quot;caller&quot;:&quot;etcdserver/server.go:1908&quot;,&quot;msg&quot;:&quot;applyEntryNormal&quot;,&quot;V2request&quot;:&quot;ID:16732981032079369986 Method:\&quot;PUT\&quot; Path:\&quot;/0/members/45d559f8148de837/attributes\&quot; Val:\&quot;{\\\&quot;name\\\&quot;:\\\&quot;infra4\\\&quot;,\\\&quot;clientURLs\\\&quot;:[\\\&quot;http://127.0.0.1:42379\\\&quot;]}\&quot; &quot;}
+</code></pre><pre tabindex="0"><code>206 {&quot;level&quot;:&quot;debug&quot;,&quot;ts&quot;:&quot;2021-12-08T10:49:48.206+0800&quot;,&quot;caller&quot;:&quot;etcdserver/server.go:1835&quot;,&quot;msg&quot;:&quot;Applying entry&quot;,&quot;index&quot;:12,&quot;term&quot;:2,&quot;type&quot;:&quot;EntryNormal&quot;}
+207 {&quot;level&quot;:&quot;debug&quot;,&quot;ts&quot;:&quot;2021-12-08T10:49:48.206+0800&quot;,&quot;caller&quot;:&quot;etcdserver/server.go:1885&quot;,&quot;msg&quot;:&quot;apply entry normal&quot;,&quot;consistent-index&quot;:11,&quot;entry-index&quot;:12,&quot;should-applyV3&quot;:true}
+208 {&quot;level&quot;:&quot;debug&quot;,&quot;ts&quot;:&quot;2021-12-08T10:49:48.206+0800&quot;,&quot;caller&quot;:&quot;etcdserver/server.go:1912&quot;,&quot;msg&quot;:&quot;applyEntryNormal&quot;,&quot;raftReq&quot;:&quot;header:&lt;ID:13926956989250840580 &gt; cluster_version_set:&lt;ver:\&quot;3.6.0\&quot; &gt; &quot;}
+
+261 {&quot;level&quot;:&quot;debug&quot;,&quot;ts&quot;:&quot;2021-12-08T10:52:35.450+0800&quot;,&quot;caller&quot;:&quot;etcdserver/server.go:1835&quot;,&quot;msg&quot;:&quot;Applying entry&quot;,&quot;index&quot;:14,&quot;term&quot;:2,&quot;type&quot;:&quot;EntryNormal&quot;}
+262 {&quot;level&quot;:&quot;debug&quot;,&quot;ts&quot;:&quot;2021-12-08T10:52:35.450+0800&quot;,&quot;caller&quot;:&quot;etcdserver/server.go:1885&quot;,&quot;msg&quot;:&quot;apply entry normal&quot;,&quot;consistent-index&quot;:13,&quot;entry-index&quot;:14,&quot;should-applyV3&quot;:true}
+263 {&quot;level&quot;:&quot;debug&quot;,&quot;ts&quot;:&quot;2021-12-08T10:52:35.450+0800&quot;,&quot;caller&quot;:&quot;etcdserver/server.go:1912&quot;,&quot;msg&quot;:&quot;applyEntryNormal&quot;,&quot;raftReq&quot;:&quot;header:&lt;ID:3632572666012018439 &gt; put:&lt;key:\&quot;\\000\\000\\000\\000\\000\\000\\000\\000\&quot; value:\&quot;\\026T\\316d\\230x\\326x\&quot; &gt; &quot;}
+</code></pre><ol start="17">
+<li>新加入的节点或者落后很多的节点，leader 会尝试发送快照数据给follower节点，<code>maybeSendAppend</code>方法在处理时会生成快照消息，如下所示：</li>
+</ol>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#a6e22e">snapshot</span>, <span style="color:#a6e22e">_</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">raftLog</span>.<span style="color:#a6e22e">snapshot</span>()
+<span style="color:#a6e22e">pb</span>.<span style="color:#a6e22e">Message</span>{
+    <span style="color:#a6e22e">To</span>: <span style="color:#a6e22e">to</span>,
+    <span style="color:#a6e22e">Type</span>: <span style="color:#a6e22e">pb</span>.<span style="color:#a6e22e">MsgSnap</span>,
+    <span style="color:#a6e22e">Snapshot</span>: <span style="color:#a6e22e">snapshot</span>, <span style="color:#75715e">// 看起来有点多余
+</span><span style="color:#75715e"></span>}
+</code></pre></div><p>应用逻辑层通过<code>Ready</code>获取<code>messages</code>之后会将快照消息单独处理（将其发送到<code>msgSnapC</code>），<code>applyAll</code> 在收到快照消息后会调用 <code>createMergedSnapshotMessage</code> 生成合并的<code>snap.Message</code>消息后将其发送到peer端。而 <code>createMergedSnapshotMessage</code> 方法会根据当前 <code>etcd progress</code> 的 <code>appliedt</code>和<code>appliedi</code>重新生成新的 <code>Metadata</code> 和 <code>Data</code> (v2 store序列化后的数据)，所以上面raft层在生成 <code>MsgSnap</code> 消息时的 <code>Snapshot</code> 是多余的，虽然不影响。</p>
+<ol start="18">
+<li><code>serializable read request</code> 和 <code>linearizable read request</code> ?</li>
+</ol>
+<blockquote>
+<p>Linearizability is one of the strongest single-object consistency models, and implies that every operation appears to take place atomically, in some order, consistent with the real-time ordering of those operations: e.g., if operation A completes before operation B begins, then B should logically take effect after A.</p>
+</blockquote>
+<blockquote>
+<p>etcd 中默认是<code>linearizable read</code>，如果需要客户端<code>serializable read</code>，可以通过<code>WithSerializable()</code>进行设置，<code>Serializable</code> 请求适用于低延迟。</p>
+</blockquote>
+<p>以<code>Range</code>为例，</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#66d9ef">if</span> !<span style="color:#a6e22e">r</span>.<span style="color:#a6e22e">Serializable</span> {
+	<span style="color:#a6e22e">err</span> = <span style="color:#a6e22e">s</span>.<span style="color:#a6e22e">linearizableReadNotify</span>(<span style="color:#a6e22e">ctx</span>)
+	<span style="color:#a6e22e">trace</span>.<span style="color:#a6e22e">Step</span>(<span style="color:#e6db74">&#34;agreement among raft nodes before linearized reading&#34;</span>)
+	<span style="color:#66d9ef">if</span> <span style="color:#a6e22e">err</span> <span style="color:#f92672">!=</span> <span style="color:#66d9ef">nil</span> {
+		<span style="color:#66d9ef">return</span> <span style="color:#66d9ef">nil</span>, <span style="color:#a6e22e">err</span>
+	}
+}
+</code></pre></div><p><code>ReadOnlyOption</code> 包含两种类型：</p>
+<ul>
+<li><code>ReadOnlySafe</code> 通过与<code>quorum</code>个节点进行通信来保证只读请求的线性化，默认选项。</li>
+<li><code>ReadOnlyLeaseBased</code> 依赖领导者租约(<code>leader lease</code>)来保证只读请求的线性化，它会受<code>clock drift</code>的影响。</li>
+</ul>
+<p>如果<code>ReadOnlyOption</code> 是 <code>ReadOnlyLeaseBased</code> 的时候必须开启<code>CheckQuorum</code>。</p>
+<ol start="19">
+<li>
+<p><a href="https://github.com/etcd-io/etcd/pull/12780">Read index retry</a> 中有个注释还没太理解</p>
+</li>
+<li></li>
+</ol>
+<hr>
+<p>codes</p>
+<pre tabindex="0"><code>server/etcdserver/server.go 299 NewServer()
+server/etcdserver/bootstrap.go 526 newRaftNode()
+server/etcdserver/bootstrap.go 268 bootstrapCluster()
+server/etcdserver/api/rafthttp/transport.go 175 Send()
+raft/node.go 241 RestartNode()
+
+
+Breakpoint 1 (enabled) at 0xfc67f5 for go.etcd.io/etcd/server/v3/etcdserver.NewServer() ./server/etcdserver/server.go:300 (1)
+Breakpoint 2 (enabled) at 0xfad002 for go.etcd.io/etcd/server/v3/etcdserver.bootstrapCluster() ./server/etcdserver/bootstrap.go:269 (1)
+</code></pre><h3 id="confstate">
+  ConfState
+  <a class="anchor" href="#confstate">#</a>
+</h3>
+<pre tabindex="0"><code>raft/tracker/tracker.go  146 ConfState()
+server/storage/schema/confstate.go 在DB中保存或者读取
+raft/confchange/restore.go 
+raft/raft.go
+
+server/etcdserver/bootstrap.go 285 bootstrapExistingClusterNoWAL()
+</code></pre><pre tabindex="0"><code>raft/raft.go stepLeader() 1112
+raft/raft.go maybeSendAppend() 432
+raft/raft.go handleAppendEntries() 1498
+</code></pre><h3 id="snapshot-发送与接收">
+  snapshot 发送与接收
+  <a class="anchor" href="#snapshot-%e5%8f%91%e9%80%81%e4%b8%8e%e6%8e%a5%e6%94%b6">#</a>
+</h3>
+<pre tabindex="0"><code>server/etcdserver/api/rafthttp/http.go 199 ServeHTTP()
+server/etcdserver/snapshot_merge.go
+server/etcdserver/server.go 906 applyAll()
+server/etcdserver/api/rafthttp/snapshot_sender.go 68 send()
+server/etcdserver/raft.go 246 start()
+</code></pre><h2 id="参考链接">
+  参考链接
+  <a class="anchor" href="#%e5%8f%82%e8%80%83%e9%93%be%e6%8e%a5">#</a>
+</h2>
+<ul>
+<li><a href="https://github.com/microyahoo/etcd">etcd 注解版</a></li>
+<li><a href="https://github.com/etcd-io/etcd/blob/main/raft/doc.go">raft doc</a></li>
+<li><a href="https://blog.csdn.net/weixin_42663840/article/details/100056484">etcd的raft实现之tracker&amp;quorum</a></li>
+<li><a href="https://www.cnblogs.com/charlieroro/p/15134181.html">etcd raft 处理流程图系列3-wal的存储和运行</a></li>
+<li><a href="https://mrcroxx.github.io/posts/code-reading/etcdraft-made-simple/5-confchange/">深入浅出etcd/raft —— 0x05 Raft成员变更</a></li>
+<li><a href="https://github.com/etcd-io/etcd/issues/12359">raft: liveness problems during apply-time configuration change</a></li>
+<li><a href="https://etcd.io/docs/v3.5/learning/design-learner/">etcd learner design</a></li>
+<li><a href="https://github.com/etcd-io/etcd/pull/11964">raft: implement fast log rejection</a></li>
+<li><a href="https://levelup.gitconnected.com/raft-consensus-protocol-made-simpler-922c38675181">Raft Consensus Protocol Made Simpler</a></li>
+</ul>
+</article>
+ 
+      
+
+      <footer class="book-footer">
+        
+  <div class="flex flex-wrap justify-between">
+
+
+
+
+
+</div>
+
+
+
+  <script>(function(){function a(c){const a=window.getSelection(),b=document.createRange();b.selectNodeContents(c),a.removeAllRanges(),a.addRange(b)}document.querySelectorAll("pre code").forEach(b=>{b.addEventListener("click",function(c){a(b.parentElement),navigator.clipboard&&navigator.clipboard.writeText(b.parentElement.textContent)})})})()</script>
+
+
+ 
+        
+      </footer>
+
+      
+  
+  <div class="book-comments">
+
+</div>
+  
+ 
+
+      <label for="menu-control" class="hidden book-menu-overlay"></label>
+    </div>
+
+    
+    <aside class="book-toc">
+      <div class="book-toc-content">
+        
+  
+<nav id="TableOfContents">
+  <ul>
+    <li><a href="#raft-message-type">Raft message type</a>
+      <ul>
+        <li><a href="#local-message">Local message</a></li>
+        <li><a href="#response-message">Response message</a></li>
+      </ul>
+    </li>
+    <li><a href="#q--a">Q &amp; A</a>
+      <ul>
+        <li><a href="#confstate">ConfState</a></li>
+        <li><a href="#snapshot-发送与接收">snapshot 发送与接收</a></li>
+      </ul>
+    </li>
+    <li><a href="#参考链接">参考链接</a></li>
+  </ul>
+</nav>
+
+
+ 
+      </div>
+    </aside>
+    
+  </main>
+
+  
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+

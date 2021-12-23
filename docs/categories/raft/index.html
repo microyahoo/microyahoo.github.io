@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="">
+<meta name="theme-color" content="#FFFFFF">
+<meta name="color-scheme" content="light dark"><meta property="og:title" content="raft" />
+<meta property="og:description" content="" />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="http://example.org/categories/raft/" />
+
+<title>raft | 酱油王</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/favicon.png" type="image/x-icon">
+<link rel="stylesheet" href="/book.min.46181bc93375ba932026e753b37c40e6ff8bb16a9ef770c78bcc663e4577b1ba.css" integrity="sha256-RhgbyTN1upMgJudTs3xA5v&#43;LsWqe93DHi8xmPkV3sbo=" crossorigin="anonymous">
+  <script defer src="/flexsearch.min.js"></script>
+  <script defer src="/en.search.min.e3d1bbac78330f1cc70982a957603bba2ca132f3b1f8b160e8efe21defc8e54b.js" integrity="sha256-49G7rHgzDxzHCYKpV2A7uiyhMvOx&#43;LFg6O/iHe/I5Us=" crossorigin="anonymous"></script>
+<link rel="alternate" type="application/rss+xml" href="http://example.org/categories/raft/index.xml" title="酱油王" />
+<!--
+Made with Book Theme
+https://github.com/alex-shpak/hugo-book
+-->
+  
+</head>
+<body dir="ltr">
+  <input type="checkbox" class="hidden toggle" id="menu-control" />
+  <input type="checkbox" class="hidden toggle" id="toc-control" />
+  <main class="container flex">
+    <aside class="book-menu">
+      <div class="book-menu-content">
+        
+  <nav>
+<h2 class="book-brand">
+  <a class="flex align-center" href="/"><span>酱油王</span>
+  </a>
+</h2>
+
+
+<div class="book-search">
+  <input type="text" id="book-search-input" placeholder="Search" aria-label="Search" maxlength="64" data-hotkeys="s/" />
+  <div class="book-search-spinner hidden"></div>
+  <ul id="book-search-results"></ul>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+  
+<ul>
+  
+  <li>
+    <a href="/posts/" >
+        Blog
+      </a>
+  </li>
+  
+</ul>
+
+
+
+
+
+
+</nav>
+
+
+
+
+  <script>(function(){var a=document.querySelector("aside .book-menu-content");addEventListener("beforeunload",function(b){localStorage.setItem("menu.scrollTop",a.scrollTop)}),a.scrollTop=localStorage.getItem("menu.scrollTop")})()</script>
+
+
+ 
+      </div>
+    </aside>
+
+    <div class="book-page">
+      <header class="book-header">
+        
+  <div class="flex align-center justify-between">
+  <label for="menu-control">
+    <img src="/svg/menu.svg" class="book-icon" alt="Menu" />
+  </label>
+
+  <strong>raft</strong>
+
+  <label for="toc-control">
+    
+    <img src="/svg/toc.svg" class="book-icon" alt="Table of Contents" />
+    
+  </label>
+</div>
+
+
+  
+  <aside class="hidden clearfix">
+    
+  <nav>
+  <ul>
+  
+    
+    <li class="book-section-flat">
+      <strong>Categories</strong>
+      <ul>
+      
+        <li class="flex justify-between">
+          <a href="/categories/golang/">golang</a>
+          <span>1</span>
+        </li>
+      
+        <li class="flex justify-between">
+          <a href="/categories/prometheus/">Prometheus</a>
+          <span>1</span>
+        </li>
+      
+        <li class="flex justify-between">
+          <a href="/categories/raft/">raft</a>
+          <span>1</span>
+        </li>
+      
+      </ul>
+    </li>
+    
+  
+    
+    <li class="book-section-flat">
+      <strong>Tags</strong>
+      <ul>
+      
+        <li class="flex justify-between">
+          <a href="/tags/golang/">golang</a>
+          <span>1</span>
+        </li>
+      
+        <li class="flex justify-between">
+          <a href="/tags/prometheus/">prometheus</a>
+          <span>1</span>
+        </li>
+      
+        <li class="flex justify-between">
+          <a href="/tags/raft/">raft</a>
+          <span>1</span>
+        </li>
+      
+      </ul>
+    </li>
+    
+  
+  </ul>
+</nav>
+
+
+  </aside>
+  
+ 
+      </header>
+
+      
+      
+  
+  <article class="markdown book-post">
+    <h2>
+      <a href="/posts/etcd_raft/">etcd raft</a>
+    </h2>
+    
+  <h5>December 23, 2021</h5>
+
+
+
+  
+  <div>
+    
+      <a href="/categories/raft/">raft</a>
+  </div>
+  
+
+  
+  <div>
+    
+      <a href="/tags/raft/">raft</a>
+  </div>
+  
+
+
+
+
+    <p>etcd 代码分析可以参考：etcd 注解版 ，也欢迎大家交流讨论
+Raft message type #  Raft集群中节点之间的通信都是通过传递不同的Message来完成的，Message类型 有很多种，下面介绍部分：
+ MsgHup   用于选举，对于follower或者candidate，其tick函数对应tickElection。如果follower或者candidate在选举超时时间都没有收到心跳信息，它将发送MsgHup到Step方法，其角色将变为candidate（对于follower节点）并发起新一轮选举。
+  MsgBeat   MsgApp是一个内部使用的类型，对于leader节点，其tick函数对应tickHeartbeat，周期性地向follower节点发送MsgHeartbeat消息。
+  MsgProp   MsgProp提议附加数据到log entries，而且它会重定向propose到leader节点。因此，send方法用hardState覆写了Message的term号。-
+ 当MsgProp传递到leader的step方法，leader首先会调用appendEntry方法将entries附加到它的log，接着会调用bcastAppend方法发送entries到peers。 当MsgProp传递到candidate，则直接丢弃。 当传递到follower，MsgProp存储到follower的mailbox，即msgs，它保存了发送者的ID，随后通过rafthttp包转发到leader。    MsgApp   复制log entries。leader调用bcastAppend方法，其会调用bcastAppend方法发送即将要复制的MsgApp类型的logs。当MsgApp被传递到candidate的Step方法，candidate将会revert back to follower，表示存在有效的leader在发送MsgApp消息。candidate和follower会回复MsgAppResp消息。
+  MsgAppResp   用于响应log复制请求。当MsgApp发送到candidate和follower的Step方法，它们会调用handleAppendEntries方法，其会发送MsgAppResp到raft mailbox。
+  MsgVote   请求投票选举。当MsgHup传递到follower或candidate的Step方法，将会调用campaign方法去竞选自己成为leader， 一旦campaign方法被调用，节点将会变成candidate，然后发送MsgVote到peers去请求投票。
+ 当消息传递到leader或candidate的Step方法，如果消息的term小于leader或candidate的term，则消息会被拒绝掉（MsgVoteResp将设置Reject为true），如果leader或candidate接收到term更大的MsgVote，他们将会revert back to follower。 当&rsquo;MsgVote&rsquo;被传递给follower时，只有当sender的last term大于MsgVote的term或sender的last term等于MsgVote的term但sender的最后提交索引大于或等于follower的时，它才会投票给sender。    MsgVoteResp   投票选举相应消息。当candidate收到MsgVoteResp，它会统计自己的票数，如果票数超过quorum，它将会变成leader，然后调用bcastAppend，如果candidate收到大多数的拒绝投票，则revert back to follower。
+        <a href="/posts/etcd_raft/">...</a>
+      
+    </p>
+  </article>
+  
+
+  
+ 
+      
+
+      <footer class="book-footer">
+        
+  <div class="flex flex-wrap justify-between">
+
+
+
+
+
+</div>
+
+
+
+  <script>(function(){function a(c){const a=window.getSelection(),b=document.createRange();b.selectNodeContents(c),a.removeAllRanges(),a.addRange(b)}document.querySelectorAll("pre code").forEach(b=>{b.addEventListener("click",function(c){a(b.parentElement),navigator.clipboard&&navigator.clipboard.writeText(b.parentElement.textContent)})})})()</script>
+
+
+ 
+        
+      </footer>
+
+      
+  
+ 
+
+      <label for="menu-control" class="hidden book-menu-overlay"></label>
+    </div>
+
+    
+    <aside class="book-toc">
+      <div class="book-toc-content">
+        
+  <nav>
+  <ul>
+  
+    
+    <li class="book-section-flat">
+      <strong>Categories</strong>
+      <ul>
+      
+        <li class="flex justify-between">
+          <a href="/categories/golang/">golang</a>
+          <span>1</span>
+        </li>
+      
+        <li class="flex justify-between">
+          <a href="/categories/prometheus/">Prometheus</a>
+          <span>1</span>
+        </li>
+      
+        <li class="flex justify-between">
+          <a href="/categories/raft/">raft</a>
+          <span>1</span>
+        </li>
+      
+      </ul>
+    </li>
+    
+  
+    
+    <li class="book-section-flat">
+      <strong>Tags</strong>
+      <ul>
+      
+        <li class="flex justify-between">
+          <a href="/tags/golang/">golang</a>
+          <span>1</span>
+        </li>
+      
+        <li class="flex justify-between">
+          <a href="/tags/prometheus/">prometheus</a>
+          <span>1</span>
+        </li>
+      
+        <li class="flex justify-between">
+          <a href="/tags/raft/">raft</a>
+          <span>1</span>
+        </li>
+      
+      </ul>
+    </li>
+    
+  
+  </ul>
+</nav>
+
+ 
+      </div>
+    </aside>
+    
+  </main>
+
+  
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+

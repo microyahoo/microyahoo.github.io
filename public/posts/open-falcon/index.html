@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Open Faclon #   Architecture #   Faclon-agent #  Falcon-agent用于数据的采集，它会定期地将metric数据通过jsonRPC上报到Transfer，其上报的metric数据格式为：
+Data model #  open-falcon采用和opentsdb相同的数据格式：metric、endpoint加多组key value tags。例如：
+{ metric: load.1min, endpoint: open-falcon-host, tags: srv=falcon,idc=aws-sgp,group=az1, value: 1.5, timestamp: `date &#43;%s`, counterType: GAUGE, step: 60 }  Transfer #   Transfer接收到agent上报的metric数据后，经过一定的处理（将tags字符串转化为map），然后上报到Graph, Judge和TSDB。  提供数据接收接口供Agent和自定义脚本push监控数据。 对接收到的数据做合法性校验，规整。 针对每个后端实例维护一个RPC连接池。 准备内存Queue中转监控数据。 根据一致性哈希将Queue中的数据转发给Judge和Graph。 当后端宕机的时候做少量数据缓存，提供重试机制。     Heartbeat Server #   HBS主要有如下功能：  agent发送心跳信息给HBS的时候，会把hostname、ip、agent version、plugin version等信息告诉HBS，HBS负责更新host表。 将IP白名单分发到所有的agent。 告诉各个agent应该执行哪些插件。 告诉各个agent应该监听哪些端口，进程。 缓存监控策略。  HBS去获取所有的报警策略缓存在内存里，然后Judge去向HBS请求。其中Judge通过rpc调用来获取。  在配置报警策略的时候配置了报警级别，比如P0/P1/P2等等，每个级别的报警都会对应不同的redis队列。         Judge #   因为监控系统数据量比较大，一台机器显然是搞不定的，所以必须要有个数据分片方案。Transfer通过一致性哈希来分片，每个Judge就只需要处理一小部分数据就可以了。 同时Judge会定期地通过RPC从Heartbeat Server同步Strategy和Expression用于告警的判定。 Judge接收到Transfer的metric数据后首先是否有针对其的Strategy和Expression，如果没有则直接跳过，如果有则进行告警判定。 Judge会将判定结果以Event的形式发送到Redis缓存中。   Alarm #   Alarm从redis缓存中获取Judge推送的Event后，根据Event的优先级分别进行处理。 Alarm从redis队列分别获取高优先级的Event和低优先级的Event，其分别位于highQueues和lowQueues，其中highQueues中配置的几个event队列中的事件是不会做告警合并的，lowQueues会做告警合并。  按照优先级轮询Redis读取告警事件。 对需要回调的告警事件回调业务系统接口。 对高优先级告警事件直接生成告警邮件和短信。 对低优先级告警事件做合并。 提供web页面展示当前未恢复的告警。   制定邮件，短信发送的接口规范。   Nodata #   nodata用于检测监控数据的上报异常。nodata和实时报警judge模块协同工作，过程为: 配置了nodata的采集项超时未上报数据，nodata生成一条默认的模拟数据；用户配置相应的报警策略，收到mock数据就产生报警。采集项上报异常检测，作为judge模块的一个必要补充，能够使judge的实时报警功能更加可靠、完善。    Graph #   References #   Open-falcon falcon-plus Falcon&#43; API Nodata 文档 心跳服务器 Falcon-HBS 源码解读视频 open-falcon 2.">
+<meta name="theme-color" content="#FFFFFF">
+<meta name="color-scheme" content="light dark"><meta property="og:title" content="" />
+<meta property="og:description" content="Open Faclon #   Architecture #   Faclon-agent #  Falcon-agent用于数据的采集，它会定期地将metric数据通过jsonRPC上报到Transfer，其上报的metric数据格式为：
+Data model #  open-falcon采用和opentsdb相同的数据格式：metric、endpoint加多组key value tags。例如：
+{ metric: load.1min, endpoint: open-falcon-host, tags: srv=falcon,idc=aws-sgp,group=az1, value: 1.5, timestamp: `date &#43;%s`, counterType: GAUGE, step: 60 }  Transfer #   Transfer接收到agent上报的metric数据后，经过一定的处理（将tags字符串转化为map），然后上报到Graph, Judge和TSDB。  提供数据接收接口供Agent和自定义脚本push监控数据。 对接收到的数据做合法性校验，规整。 针对每个后端实例维护一个RPC连接池。 准备内存Queue中转监控数据。 根据一致性哈希将Queue中的数据转发给Judge和Graph。 当后端宕机的时候做少量数据缓存，提供重试机制。     Heartbeat Server #   HBS主要有如下功能：  agent发送心跳信息给HBS的时候，会把hostname、ip、agent version、plugin version等信息告诉HBS，HBS负责更新host表。 将IP白名单分发到所有的agent。 告诉各个agent应该执行哪些插件。 告诉各个agent应该监听哪些端口，进程。 缓存监控策略。  HBS去获取所有的报警策略缓存在内存里，然后Judge去向HBS请求。其中Judge通过rpc调用来获取。  在配置报警策略的时候配置了报警级别，比如P0/P1/P2等等，每个级别的报警都会对应不同的redis队列。         Judge #   因为监控系统数据量比较大，一台机器显然是搞不定的，所以必须要有个数据分片方案。Transfer通过一致性哈希来分片，每个Judge就只需要处理一小部分数据就可以了。 同时Judge会定期地通过RPC从Heartbeat Server同步Strategy和Expression用于告警的判定。 Judge接收到Transfer的metric数据后首先是否有针对其的Strategy和Expression，如果没有则直接跳过，如果有则进行告警判定。 Judge会将判定结果以Event的形式发送到Redis缓存中。   Alarm #   Alarm从redis缓存中获取Judge推送的Event后，根据Event的优先级分别进行处理。 Alarm从redis队列分别获取高优先级的Event和低优先级的Event，其分别位于highQueues和lowQueues，其中highQueues中配置的几个event队列中的事件是不会做告警合并的，lowQueues会做告警合并。  按照优先级轮询Redis读取告警事件。 对需要回调的告警事件回调业务系统接口。 对高优先级告警事件直接生成告警邮件和短信。 对低优先级告警事件做合并。 提供web页面展示当前未恢复的告警。   制定邮件，短信发送的接口规范。   Nodata #   nodata用于检测监控数据的上报异常。nodata和实时报警judge模块协同工作，过程为: 配置了nodata的采集项超时未上报数据，nodata生成一条默认的模拟数据；用户配置相应的报警策略，收到mock数据就产生报警。采集项上报异常检测，作为judge模块的一个必要补充，能够使judge的实时报警功能更加可靠、完善。    Graph #   References #   Open-falcon falcon-plus Falcon&#43; API Nodata 文档 心跳服务器 Falcon-HBS 源码解读视频 open-falcon 2." />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="http://example.org/posts/open-falcon/" /><meta property="article:section" content="posts" />
+
+
+
+<title>Open Falcon | ZhengLiang Site</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/favicon.png" type="image/x-icon">
+<link rel="stylesheet" href="/book.min.46181bc93375ba932026e753b37c40e6ff8bb16a9ef770c78bcc663e4577b1ba.css" integrity="sha256-RhgbyTN1upMgJudTs3xA5v&#43;LsWqe93DHi8xmPkV3sbo=" crossorigin="anonymous">
+  <script defer src="/flexsearch.min.js"></script>
+  <script defer src="/en.search.min.ee290a52bc838905d50c0825275d8335c4a347ae6d4e1ed008006d947574f047.js" integrity="sha256-7ikKUryDiQXVDAglJ12DNcSjR65tTh7QCABtlHV08Ec=" crossorigin="anonymous"></script>
+<!--
+Made with Book Theme
+https://github.com/alex-shpak/hugo-book
+-->
+  
+</head>
+<body dir="ltr">
+  <input type="checkbox" class="hidden toggle" id="menu-control" />
+  <input type="checkbox" class="hidden toggle" id="toc-control" />
+  <main class="container flex">
+    <aside class="book-menu">
+      <div class="book-menu-content">
+        
+  <nav>
+<h2 class="book-brand">
+  <a class="flex align-center" href="/"><span>ZhengLiang Site</span>
+  </a>
+</h2>
+
+
+<div class="book-search">
+  <input type="text" id="book-search-input" placeholder="Search" aria-label="Search" maxlength="64" data-hotkeys="s/" />
+  <div class="book-search-spinner hidden"></div>
+  <ul id="book-search-results"></ul>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+
+
+  
+  <ul>
+    
+      
+        <li class="book-section-flat" >
+          
+  
+  
+
+  
+    <a href="http://example.org/docs/example/" class="">Example Site</a>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+    <a href="http://example.org/docs/example/table-of-contents/" class="">Table of Contents</a>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+    <a href="http://example.org/docs/example/table-of-contents/with-toc/" class="">With ToC</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+    <a href="http://example.org/docs/example/table-of-contents/without-toc/" class="">Without ToC</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+    <input type="checkbox" id="section-4e46b01272d410b3a99461d79326ddf4" class="toggle"  />
+    <label for="section-4e46b01272d410b3a99461d79326ddf4" class="flex justify-between">
+      <a role="button" class="">Collapsed</a>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+    <a href="http://example.org/docs/example/collapsed/3rd-level/" class="">3rd Level</a>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+    <a href="http://example.org/docs/example/collapsed/3rd-level/4th-level/" class="">4th Level</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li class="book-section-flat" >
+          
+  
+  
+
+  
+    <span>Shortcodes</span>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+    <a href="http://example.org/docs/shortcodes/buttons/" class="">Buttons</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+    <a href="http://example.org/docs/shortcodes/columns/" class="">Columns</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+    <a href="http://example.org/docs/shortcodes/details/" class="">Details</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+    <a href="http://example.org/docs/shortcodes/expand/" class="">Expand</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+    <a href="http://example.org/docs/shortcodes/hints/" class="">Hints</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+    <a href="http://example.org/docs/shortcodes/katex/" class="">Katex</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+    <a href="http://example.org/docs/shortcodes/mermaid/" class="">Mermaid</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+    <input type="checkbox" id="section-d3fc1bf6d66cd84b896a0af9f40cb1d5" class="toggle"  />
+    <label for="section-d3fc1bf6d66cd84b896a0af9f40cb1d5" class="flex justify-between">
+      <a href="http://example.org/docs/shortcodes/section/" class="">Section</a>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+    <a href="http://example.org/docs/shortcodes/section/first-page/" class="">First Page</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+    <a href="http://example.org/docs/shortcodes/section/second-page/" class="">Second Page</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+    <a href="http://example.org/docs/shortcodes/tabs/" class="">Tabs</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+  </ul>
+
+
+
+
+
+
+
+
+
+
+
+  
+<ul>
+  
+  <li>
+    <a href="/posts/" >
+        Blog
+      </a>
+  </li>
+  
+</ul>
+
+
+
+
+
+
+</nav>
+
+
+
+
+  <script>(function(){var a=document.querySelector("aside .book-menu-content");addEventListener("beforeunload",function(b){localStorage.setItem("menu.scrollTop",a.scrollTop)}),a.scrollTop=localStorage.getItem("menu.scrollTop")})()</script>
+
+
+ 
+      </div>
+    </aside>
+
+    <div class="book-page">
+      <header class="book-header">
+        
+  <div class="flex align-center justify-between">
+  <label for="menu-control">
+    <img src="/svg/menu.svg" class="book-icon" alt="Menu" />
+  </label>
+
+  <strong>Open Falcon</strong>
+
+  <label for="toc-control">
+    
+    <img src="/svg/toc.svg" class="book-icon" alt="Table of Contents" />
+    
+  </label>
+</div>
+
+
+  
+  <aside class="hidden clearfix">
+    
+  
+<nav id="TableOfContents">
+  <ul>
+    <li><a href="#open-faclon">Open Faclon</a>
+      <ul>
+        <li><a href="#architecture">Architecture</a></li>
+        <li><a href="#references">References</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+
+
+
+  </aside>
+  
+ 
+      </header>
+
+      
+      
+<article class="markdown">
+  <h1>
+    <a href="/posts/open-falcon/">Open Falcon</a>
+  </h1>
+  
+
+
+  
+
+  
+
+
+
+<h2 id="open-faclon">
+  Open Faclon
+  <a class="anchor" href="#open-faclon">#</a>
+</h2>
+<hr>
+<h3 id="architecture">
+  Architecture
+  <a class="anchor" href="#architecture">#</a>
+</h3>
+<p><img src="http://book.open-falcon.com/zh_0_2/image/func_intro_1.png" alt="image" />
+<img src="https://raw.githubusercontent.com/niean/niean.common.store/master/images/open-falcon/nodata/nodata.flow.png" alt="系统流图" />
+<img src="https://raw.githubusercontent.com/niean/niean.common.store/master/images/open-falcon/nodata/nodata.module.png" alt="模块结构" />
+<img src="https://raw.githubusercontent.com/niean/niean.common.store/master/images/open-falcon/nodata/nodata.deploy.png" alt="部署架构" /></p>
+<hr>
+<h4 id="faclon-agent">
+  Faclon-agent
+  <a class="anchor" href="#faclon-agent">#</a>
+</h4>
+<p><code>Falcon-agent</code>用于数据的采集，它会定期地将<code>metric</code>数据通过<code>jsonRPC</code>上报到<code>Transfer</code>，其上报的<code>metric</code>数据格式为：</p>
+<h5 id="data-model">
+  Data model
+  <a class="anchor" href="#data-model">#</a>
+</h5>
+<p><code>open-falcon</code>采用和<code>opentsdb</code>相同的数据格式：metric、endpoint加多组key value tags。例如：</p>
+<pre tabindex="0"><code>{
+    metric: load.1min,
+    endpoint: open-falcon-host,
+    tags: srv=falcon,idc=aws-sgp,group=az1,
+    value: 1.5,
+    timestamp: `date +%s`,
+    counterType: GAUGE,
+    step: 60
+}
+</code></pre><hr>
+<h4 id="transfer">
+  Transfer
+  <a class="anchor" href="#transfer">#</a>
+</h4>
+<ul>
+<li><code>Transfer</code>接收到<code>agent</code>上报的<code>metric</code>数据后，经过一定的处理（将tags字符串转化为map），然后上报到<code>Graph</code>, <code>Judge</code>和<code>TSDB</code>。
+<ul>
+<li>提供数据接收接口供Agent和自定义脚本push监控数据。</li>
+<li>对接收到的数据做合法性校验，规整。</li>
+<li>针对每个后端实例维护一个RPC连接池。</li>
+<li>准备内存Queue中转监控数据。</li>
+<li>根据一致性哈希将Queue中的数据转发给Judge和Graph。</li>
+<li>当后端宕机的时候做少量数据缓存，提供重试机制。</li>
+</ul>
+</li>
+</ul>
+<hr>
+<h4 id="heartbeat-server">
+  Heartbeat Server
+  <a class="anchor" href="#heartbeat-server">#</a>
+</h4>
+<ul>
+<li>HBS主要有如下功能：
+<ul>
+<li><code>agent</code>发送心跳信息给<code>HBS</code>的时候，会把hostname、ip、agent version、plugin version等信息告诉<code>HBS</code>，<code>HBS</code>负责更新host表。</li>
+<li>将IP白名单分发到所有的agent。</li>
+<li>告诉各个agent应该执行哪些插件。</li>
+<li>告诉各个agent应该监听哪些端口，进程。</li>
+<li>缓存监控策略。
+<ul>
+<li><code>HBS</code>去获取所有的报警策略缓存在内存里，然后<code>Judge</code>去向<code>HBS</code>请求。其中<code>Judge</code>通过rpc调用来获取。
+<ul>
+<li>在配置报警策略的时候配置了报警级别，比如P0/P1/P2等等，每个级别的报警都会对应不同的redis队列。</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<hr>
+<h4 id="judge">
+  Judge
+  <a class="anchor" href="#judge">#</a>
+</h4>
+<ul>
+<li>因为监控系统数据量比较大，一台机器显然是搞不定的，所以必须要有个数据分片方案。<code>Transfer</code>通过<code>一致性哈希</code>来分片，每个<code>Judge</code>就只需要处理一小部分数据就可以了。</li>
+<li>同时<code>Judge</code>会定期地通过RPC从<code>Heartbeat Server</code>同步<code>Strategy</code>和<code>Expression</code>用于告警的判定。</li>
+<li><code>Judge</code>接收到<code>Transfer</code>的<code>metric</code>数据后首先是否有针对其的<code>Strategy</code>和<code>Expression</code>，如果没有则直接跳过，如果有则进行告警判定。</li>
+<li><code>Judge</code>会将判定结果以<code>Event</code>的形式发送到Redis缓存中。</li>
+</ul>
+<hr>
+<h4 id="alarm">
+  Alarm
+  <a class="anchor" href="#alarm">#</a>
+</h4>
+<ul>
+<li><code>Alarm</code>从redis缓存中获取<code>Judge</code>推送的Event后，根据Event的优先级分别进行处理。</li>
+<li><code>Alarm</code>从redis队列分别获取高优先级的Event和低优先级的Event，其分别位于<code>highQueues</code>和<code>lowQueues</code>，其中<code>highQueues</code>中配置的几个event队列中的事件是不会做告警合并的，<code>lowQueues</code>会做告警合并。
+<ul>
+<li>按照优先级轮询Redis读取告警事件。</li>
+<li>对需要回调的告警事件回调业务系统接口。</li>
+<li>对高优先级告警事件直接生成告警邮件和短信。</li>
+<li>对低优先级告警事件做合并。</li>
+<li>提供web页面展示当前未恢复的告警。</li>
+</ul>
+</li>
+<li>制定邮件，短信发送的接口规范。</li>
+</ul>
+<hr>
+<h4 id="nodata">
+  Nodata
+  <a class="anchor" href="#nodata">#</a>
+</h4>
+<ul>
+<li>nodata用于检测监控数据的上报异常。nodata和实时报警judge模块协同工作，过程为: 配置了nodata的采集项超时未上报数据，nodata生成一条默认的模拟数据；用户配置相应的报警策略，收到mock数据就产生报警。采集项上报异常检测，作为judge模块的一个必要补充，能够使judge的实时报警功能更加可靠、完善。</li>
+<li></li>
+</ul>
+<hr>
+<h4 id="graph">
+  Graph
+  <a class="anchor" href="#graph">#</a>
+</h4>
+<hr>
+<h3 id="references">
+  References
+  <a class="anchor" href="#references">#</a>
+</h3>
+<ul>
+<li><a href="http://open-falcon.org/">Open-falcon</a></li>
+<li><a href="https://github.com/open-falcon/falcon-plus/">falcon-plus</a></li>
+<li><a href="http://open-falcon.org/falcon-plus/">Falcon+ API</a></li>
+<li><a href="https://github.com/open-falcon-archive/nodata">Nodata</a></li>
+<li><a href="http://book.open-falcon.org/zh/install_from_src/hbs.html">文档</a></li>
+<li><a href="http://www.jikexueyuan.com/course/1873.html">心跳服务器 Falcon-HBS 源码解读视频</a></li>
+<li><a href="http://book.open-falcon.com/zh_0_2/intro/">open-falcon 2.0文档</a></li>
+<li><a href="http://www.jikexueyuan.com/course/1651.html">open-falcon部署与架构解析</a></li>
+<li><a href="http://www.jikexueyuan.com/course/2242.html">数据采集模块 Falcon-Agent 源码解读</a></li>
+<li><a href="http://www.jikexueyuan.com/course/operationmonitor/">运维监控视频</a></li>
+</ul>
+</article>
+ 
+      
+
+      <footer class="book-footer">
+        
+  <div class="flex flex-wrap justify-between">
+
+
+
+
+
+</div>
+
+
+
+  <script>(function(){function a(c){const a=window.getSelection(),b=document.createRange();b.selectNodeContents(c),a.removeAllRanges(),a.addRange(b)}document.querySelectorAll("pre code").forEach(b=>{b.addEventListener("click",function(c){a(b.parentElement),navigator.clipboard&&navigator.clipboard.writeText(b.parentElement.textContent)})})})()</script>
+
+
+ 
+        
+      </footer>
+
+      
+  
+  <div class="book-comments">
+
+</div>
+  
+ 
+
+      <label for="menu-control" class="hidden book-menu-overlay"></label>
+    </div>
+
+    
+    <aside class="book-toc">
+      <div class="book-toc-content">
+        
+  
+<nav id="TableOfContents">
+  <ul>
+    <li><a href="#open-faclon">Open Faclon</a>
+      <ul>
+        <li><a href="#architecture">Architecture</a></li>
+        <li><a href="#references">References</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+
+
+ 
+      </div>
+    </aside>
+    
+  </main>
+
+  
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
